@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NSSL MOBILE MESONET DATA VIEWER</title>
+  <link rel="stylesheet" href="/static/uplot.min.css">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #1e1e2e;
+      --surface:  #181825;
+      --border:   #313244;
+      --muted:    #45475a;
+      --text:     #cdd6f4;
+      --subtext:  #c5cbe5;
+      --t:        #f38ba8;
+      --td:       #89b4fa;
+      --wspd:     #a6e3a1;
+      --wdir:     #fab387;
+      --pressure: #cba6f7;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-monospace, 'Cascadia Code', monospace;
+      font-size: 14px;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── Header ──────────────────────────────────────────────── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    h1 {
+      font-size: 0.9rem;
+      color: #cfe2ff;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    #status-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 0.75rem;
+      color: var(--subtext);
+    }
+
+    #conn-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--wspd);
+      transition: background 0.3s;
+      flex-shrink: 0;
+    }
+    #conn-dot.off { background: var(--t); }
+
+    #live-btn, #reset-btn {
+      background: var(--muted);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 3px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.75rem;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    #live-btn:hover, #reset-btn:hover { border-color: var(--subtext); }
+    #live-btn.paused { border-color: var(--t); color: var(--t); }
+    #reset-btn { display: none; border-color: var(--pressure); color: var(--pressure); }
+    #reset-btn:hover { border-color: var(--text); color: var(--text); }
+
+    #maxwind-reset-btn {
+      background: var(--muted); color: var(--subtext);
+      border: 1px solid var(--border); padding: 2px 8px;
+      border-radius: 4px; cursor: pointer; font-family: inherit;
+      font-size: 0.72rem; transition: border-color 0.2s, color 0.2s;
+    }
+    #maxwind-reset-btn:hover { border-color: var(--subtext); color: var(--text); }
+
+    /* ── Layout ──────────────────────────────────────────────── */
+    main {
+      flex: 1;
+      min-height: 0;
+      padding: 12px;
+      display: grid;
+      grid-template-columns: 1fr 240px;
+      gap: 12px;
+      align-items: stretch;
+      overflow: hidden;
+    }
+
+    #charts-col {
+      min-width: 0;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow: hidden;
+    }
+
+    #sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar compression ─────────────────────────────────── */
+    #sidebar .card { padding: 8px 10px 6px; }
+    #sidebar .card-title { font-size: 0.64rem; margin-bottom: 5px; }
+    #sidebar .cv-row { padding: 3px 0; font-size: 0.72rem; }
+    #sidebar .status-grid { gap: 6px; font-size: 0.72rem; }
+    #sidebar #compass-canvas { width: 180px; height: 180px; }
+    #sidebar #compass-deg { font-size: 0.74rem; }
+    #sidebar .cv-label { white-space: nowrap; }
+    #sidebar .cv-val { white-space: nowrap; }
+
+    /* ── Cards ───────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px 8px;
+    }
+
+    .card-title {
+      font-size: 0.68rem;
+      color: var(--subtext);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      margin-bottom: 6px;
+    }
+
+    /* ── Compass ─────────────────────────────────────────────── */
+    #compass-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+
+    #compass-canvas { display: block; }
+
+    #compass-deg {
+      font-size: 0.85rem;
+      color: var(--wdir);
+      letter-spacing: 0.06em;
+    }
+
+    /* ── Current values ──────────────────────────────────────── */
+    .cv-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 4px 0;
+      font-size: 0.74rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .cv-row:last-child { border-bottom: none; }
+    .cv-label { color: var(--subtext); }
+    .cv-val   { font-weight: 600; }
+    .cv-t        .cv-val { color: var(--t); }
+    .cv-td       .cv-val { color: var(--td); }
+    .cv-pressure .cv-val { color: var(--pressure); }
+    .cv-wspd     .cv-val { color: var(--wspd); }
+    .cv-wdir     .cv-val { color: var(--wdir); }
+
+    /* ── Status panel ───────────────────────────────────────── */
+    .status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      font-size: 0.75rem;
+    }
+    .status-item { display: flex; flex-direction: column; gap: 2px; }
+    .status-label { color: var(--subtext); }
+    .status-val { font-weight: 600; }
+
+    /* ── uPlot overrides ─────────────────────────────────────── */
+    .u-legend {
+      background: transparent !important;
+      font-size: 0.72rem;
+      color: var(--subtext);
+    }
+    .u-legend th, .u-legend td { color: var(--subtext); }
+    .u-legend .u-marker {
+      width: 14px;
+      height: 0;
+      border-top: 2px solid currentColor;
+      border-radius: 0;
+      background: none !important;
+      margin-right: 6px;
+      transform: translateY(-1px);
+    }
+
+    .u-select {
+      background: rgba(99, 179, 237, 0.15) !important;
+      border: 1px solid rgba(99, 179, 237, 0.55) !important;
+    }
+
+    .zoom-hint {
+      text-align: right;
+      font-size: 0.65rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    /* Each chart card fills an equal share of the charts column height */
+    #charts-col .card {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Chart wrapper fills whatever space the card has after title and hint */
+    .chart-wrap {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* ── Mobile responsive ───────────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      body {
+        height: auto;
+        min-height: 100vh;
+        overflow-y: auto;
+      }
+
+      main {
+        grid-template-columns: 1fr;
+        overflow: visible;
+        height: auto;
+      }
+
+      #charts-col {
+        height: auto;
+        overflow: visible;
+      }
+
+      /* Fixed height per chart card so they don't collapse in a scrollable layout */
+      #charts-col .card {
+        flex: none;
+        height: 240px;
+      }
+
+      #sidebar {
+        height: auto;
+        overflow: visible;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      /* Compass card spans both columns */
+      #sidebar > .card:first-child {
+        grid-column: 1 / -1;
+      }
+
+      /* Scale compass down to fit mobile */
+      #sidebar #compass-canvas {
+        width: 140px;
+        height: 140px;
+      }
+
+      /* Increase sidebar text sizes for readability */
+      #sidebar .card-title  { font-size: 0.78rem; }
+      #sidebar .cv-row      { font-size: 0.80rem; padding: 5px 0; }
+      #sidebar .status-grid { font-size: 0.78rem; }
+      #sidebar #compass-deg { font-size: 0.85rem; }
+
+      /* Touch-friendly button targets */
+      #live-btn, #reset-btn {
+        padding: 8px 16px;
+        font-size: 0.82rem;
+        min-height: 36px;
+      }
+
+      #maxwind-reset-btn {
+        padding: 8px 14px;
+        font-size: 0.80rem;
+        min-height: 36px;
+      }
+
+      .zoom-hint { font-size: 0.68rem; }
+    }
+
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>NSSL Mobile Mesonet</h1>
+  <div id="status-bar">
+    <span id="conn-dot"></span>
+    <span id="last-update">--:--:-- UTC</span>
+    <button id="reset-btn">Reset Zoom</button>
+    <button id="live-btn">Pause</button>
+  </div>
+</header>
+
+<main>
+  <div id="charts-col">
+    <div class="card">
+      <div class="card-title">Temperature &amp; Dewpoint</div>
+      <div class="chart-wrap"><div id="chart-ttd"></div></div>
+      <div class="zoom-hint">drag to zoom · scroll to pan · double-click to reset</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Wind Speed &amp; Direction</div>
+      <div class="chart-wrap"><div id="chart-wind"></div></div>
+      <div class="zoom-hint">drag to zoom · scroll to pan · double-click to reset</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Pressure</div>
+      <div class="chart-wrap"><div id="chart-pressure"></div></div>
+      <div class="zoom-hint">drag to zoom · scroll to pan · double-click to reset</div>
+    </div>
+  </div>
+
+  <div id="sidebar">
+    <div class="card">
+      <div class="card-title">Heading</div>
+      <div id="compass-wrap">
+        <canvas id="compass-canvas" width="200" height="200"></canvas>
+        <div id="compass-deg">---°</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Current</div>
+      <div class="cv-row cv-t">
+        <span class="cv-label">T</span>
+        <span class="cv-val" id="cv-t">--</span>
+      </div>
+      <div class="cv-row cv-td">
+        <span class="cv-label">Td</span>
+        <span class="cv-val" id="cv-td">--</span>
+      </div>
+      <div class="cv-row cv-pressure">
+        <span class="cv-label">Pressure</span>
+        <span class="cv-val" id="cv-pressure">--</span>
+      </div>
+      <div class="cv-row cv-wspd">
+        <span class="cv-label">Speed</span>
+        <span class="cv-val" id="cv-wspd">--</span>
+      </div>
+      <div class="cv-row cv-wdir">
+        <span class="cv-label">Wind Dir</span>
+        <span class="cv-val" id="cv-wdir">--</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">30‑second averages</div>
+      <div class="cv-row cv-t">
+        <span class="cv-label">T</span>
+        <span class="cv-val" id="avg-t">--</span>
+      </div>
+      <div class="cv-row cv-td">
+        <span class="cv-label">Td</span>
+        <span class="cv-val" id="avg-td">--</span>
+      </div>
+      <div class="cv-row cv-pressure">
+        <span class="cv-label">Pressure</span>
+        <span class="cv-val" id="avg-pressure">--</span>
+      </div>
+      <div class="cv-row cv-wspd">
+        <span class="cv-label">Speed</span>
+        <span class="cv-val" id="avg-wspd">--</span>
+      </div>
+      <div class="cv-row cv-wdir">
+        <span class="cv-label">Wind Dir</span>
+        <span class="cv-val" id="avg-wdir">--</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Status</div>
+      <div class="status-grid">
+        <div class="status-item">
+          <span class="status-label">Last update</span>
+          <span class="status-val" id="stat-last">--</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Gaps (UTC day)</span>
+          <span class="status-val" id="stat-gaps">--</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Completeness</span>
+          <span class="status-val" id="stat-comp">--</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">3‑min ΔP</span>
+          <span class="status-val" id="stat-ptrend">--</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Max Wind Speed</div>
+      <div class="cv-row cv-wspd">
+        <span class="cv-label">Speed</span>
+        <span class="cv-val" id="mw-wspd">--</span>
+      </div>
+      <div class="cv-row">
+        <span class="cv-label">Time</span>
+        <span class="cv-val" id="mw-time">--</span>
+      </div>
+      <div class="cv-row">
+        <span class="cv-label">Lat</span>
+        <span class="cv-val" id="mw-lat">--</span>
+      </div>
+      <div class="cv-row">
+        <span class="cv-label">Lon</span>
+        <span class="cv-val" id="mw-lon">--</span>
+      </div>
+      <div style="text-align:right; margin-top:6px;">
+        <button id="maxwind-reset-btn">Reset Max</button>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script src="/static/uplot.min.js"></script>
+<script>
+// ── Palette ───────────────────────────────────────────────────────────────────
+const C = {
+  grid:     '#313244',
+  text:     '#a6adc8',
+  t:        '#f38ba8',
+  td:       '#89b4fa',
+  wspd:     '#a6e3a1',
+  wdir:     '#fab387',
+  pressure: '#cba6f7',
+};
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const MAX_PTS    = 7200; // rolling buffer — 2 hours at 1 Hz (matches /initial history window)
+const VIEW_SEC   = 1800; // default live viewport — 30 minutes visible in non-zoomed mode
+const AVG_WIN    = 30;   // number of points in the live 30-second sidebar averages
+const GAP_SEC    = 2;    // readings ≥2 s apart get a null sentinel (line break on chart)
+const OPS_GAP_SEC = 14400; // gap ≥ this (4 hours) marks a new operations day; limits scroll-back
+
+let buf = { ts: [], t: [], td: [], wspd: [], wdir: [], pressure: [], compass_dir: [], lat: [], lon: [] };
+// parallel arrays — every field has the same length as buf.ts.
+// null values in non-ts fields mark gap sentinels (see pushGap).
+
+let lastRealTs   = null;  // timestamp of the last real (non-gap) point, used to detect gaps
+let gapCountToday = 0;    // number of gaps seen since the current UTC day started
+let gapDayStart   = null; // UTC midnight of the day gapCountToday belongs to; reset when the day rolls over
+
+let initialLoaded = false; // flips true once /initial has been processed; until then, incoming SSE points are queued
+let pendingPoints = [];    // SSE points that arrived before /initial finished; replayed in order after load
+
+let isLive     = true;  // false while the Pause button is active; suppresses pushToCharts on incoming data
+let charts     = {};    // keyed uPlot instances: { ttd, wind, pressure }
+let zoomedRange = null; // null = live/auto-advance; {min, max} = x window locked by a user drag-zoom
+
+// Max wind tracker — highest wspd observed since ops day start (or user reset).
+// resetTs: only consider points at or after this timestamp; null = use opsStart().
+let maxWind = { wspd: null, ts: null, lat: null, lon: null, resetTs: null };
+
+const resetBtn = document.getElementById('reset-btn');
+
+// ── Chart helpers ─────────────────────────────────────────────────────────────
+function chartWidth() {
+  // Read the actual pixel width from the flex-1 chart-wrap after CSS layout.
+  const wrap = document.querySelector('.chart-wrap');
+  return Math.max(300, wrap ? wrap.clientWidth : 400);
+}
+
+function chartHeight() {
+  // Read the actual pixel height from the flex-1 chart-wrap after CSS layout.
+  // The wrap is a flex child of its card and gets exactly the space left over
+  // after the card title, zoom hint, and padding are rendered.
+  const wrap = document.querySelector('.chart-wrap');
+  return Math.max(120, wrap ? wrap.clientHeight : 200);
+}
+
+// Formats a Unix-second timestamp as a local date/time string for uPlot cursor tooltips.
+function fmtLocalDateTime(ts) {
+  if (ts == null) return '';
+  const d = new Date(ts * 1000);
+  return d.toLocaleString([], {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+// The server always sends Unix seconds, but guard against accidental millisecond timestamps.
+function normTs(ts) {
+  if (ts == null) return ts;
+  return ts > 1e11 ? ts / 1000 : ts;
+}
+
+function xAxis() {
+  return {
+    stroke: C.text,
+    grid:  { stroke: C.grid, width: 1 },
+    ticks: { stroke: C.grid, width: 1 },
+    space: 80,
+    size:  44,
+    gap:   6,
+    font:  '11px ui-monospace, "Cascadia Code", monospace',
+    // Explicit tick intervals (seconds) — prevents uPlot from choosing sub-second values.
+    incrs: [5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600],
+    // Show HH:MMZ on whole-minute ticks; show seconds on sub-minute ticks with the time below.
+    values: (_u, splits) => splits.map(ts => {
+      if (ts == null) return '';
+      const iso  = new Date(ts * 1000).toISOString();
+      const hhmm = iso.slice(11, 16) + 'Z';
+      const sec  = iso.slice(17, 19);
+      return sec === '00' ? hhmm : `${sec}\n${hhmm}`;
+    }),
+  };
+}
+
+function xScale() {
+  return {
+    // uPlot calls range() with null/null during its own dblclick reset.
+    // Return the actual data extents so the chart doesn't blank out before
+    // pushToCharts re-asserts the correct window on the next animation frame.
+    range(u, min, max) {
+      if (min == null || max == null) {
+        const ts = u.data && u.data[0];
+        if (!ts || ts.length === 0) return [0, 60];
+        let dMin = Infinity, dMax = -Infinity;
+        for (const t of ts) {
+          if (t != null && t < dMin) dMin = t;
+          if (t != null && t > dMax) dMax = t;
+        }
+        if (!isFinite(dMin)) return [0, 60];
+        return dMin === dMax ? [dMin, dMin + 60] : [dMin, dMax];
+      }
+      // Guarantee a non-zero window so the axis doesn't collapse to a vertical line.
+      if (min === max) return [min, max + 60];
+      return [min, max];
+    },
+  };
+}
+
+// Returns {min, max} of arr, skipping nulls and NaNs. Returns null if arr is all-null.
+function minMax(arr) {
+  let min = Infinity, max = -Infinity;
+  for (const v of arr) {
+    if (v == null || Number.isNaN(v)) continue;
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  if (min === Infinity) return null;
+  return { min, max };
+}
+
+// Like minMax but only scans buf entries whose timestamp falls within [xMin, xMax].
+// Scans backwards from the end of buf so it stops quickly — O(visible points), not O(MAX_PTS).
+function minMaxVisible(key, xMin, xMax) {
+  let min = Infinity, max = -Infinity;
+  for (let i = buf.ts.length - 1; i >= 0; i--) {
+    if (buf.ts[i] < xMin) break;
+    if (buf.ts[i] > xMax) continue;
+    const v = buf[key][i];
+    if (v == null || Number.isNaN(v)) continue;
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  if (min === Infinity) return null;
+  return { min, max };
+}
+
+// Returns the timestamp of the first data point in the current operations day.
+// An "operations day" is defined as a continuous block of data; any gap
+// ≥ OPS_GAP_SEC in buf.ts is treated as the boundary between two ops days.
+// Scans backwards so it finds the most recent boundary — cross-midnight runs
+// are handled naturally (no UTC date logic needed). If no large gap exists in
+// the buffer, the entire buffer belongs to the current ops day.
+function opsStart() {
+  const n = buf.ts.length;
+  if (n === 0) return null;
+  for (let i = n - 1; i > 0; i--) {
+    if (buf.ts[i] - buf.ts[i - 1] >= OPS_GAP_SEC) {
+      return buf.ts[i]; // first point after the most recent big gap
+    }
+  }
+  return buf.ts[0]; // no ops-day boundary found — whole buffer is one run
+}
+
+// Expands a {min, max} range by padFrac of its span (or minPad, whichever is larger)
+// so data doesn't sit flush against the top/bottom of the y-axis.
+function paddedRange(mm, padFrac = 0.05, minPad = 1) {
+  if (!mm) return null;
+  if (mm.min === mm.max) return { min: mm.min - minPad, max: mm.max + minPad };
+  const pad = Math.max((mm.max - mm.min) * padFrac, minPad);
+  return { min: mm.min - pad, max: mm.max + pad };
+}
+
+// Factory for a styled y-axis; side 1 = left, 3 = right.
+function yAxis(scale, label, side, color) {
+  return {
+    scale, label, side,
+    labelGap: 6, gap: 4, size: 56,
+    stroke: color,
+    grid:  { stroke: C.grid, width: 1 },
+    ticks: { stroke: C.grid, width: 1 },
+  };
+}
+
+// Rounds val up to the nearest multiple of base — used to produce clean wind speed tick intervals.
+function niceStep(val, base = 0.5) {
+  return Math.max(base, Math.ceil(val / base) * base);
+}
+
+// Exits zoom mode: clears zoomedRange, redraws at full data range, updates UI.
+// Called from the Reset Zoom button and from double-click on any chart canvas.
+function resetZoom() {
+  zoomedRange = null;
+  pushToCharts();
+  resetBtn.style.display = 'none';
+}
+
+// Attaches mousedown/mouseup/dblclick listeners to a chart's canvas overlay.
+//
+// Zoom detection: we avoid uPlot's setScale hook because it fires for every
+// programmatic scale change (our pushToCharts calls, cursor sync, uPlot's own
+// internal resets) — impossible to reliably distinguish from user intent.
+// Instead: snapshot the x window on mousedown, then on mouseup defer a check
+// (setTimeout 0 lets uPlot process the drag first). If the window shrank, the
+// user zoomed — lock zoomedRange to preserve it across data pushes.
+//
+// Double-click: handled here via a direct canvas listener instead of the uPlot
+// dblclick hook so we can set a pendingReset flag *before* the mouseup timeouts
+// fire, preventing them from re-engaging zoom detection on the same gesture.
+function addZoomListeners(chart) {
+  let preDragScale = null;
+  let pendingReset = false;
+
+  chart.over.addEventListener('dblclick', () => {
+    pendingReset = true;
+    resetZoom();
+    // Keep the flag up long enough for any queued mouseup callbacks to see it.
+    setTimeout(() => { pendingReset = false; }, 100);
+  });
+
+  chart.over.addEventListener('mousedown', () => {
+    const sx = chart.scales.x;
+    preDragScale = sx.min != null ? { min: sx.min, max: sx.max } : null;
+  });
+
+  chart.over.addEventListener('mouseup', () => {
+    const pre = preDragScale;
+    preDragScale = null;
+    if (!pre) return;
+    // Defer so uPlot's mouseup handler (registered before ours) runs first and
+    // updates chart.scales.x to the zoomed range before we read it.
+    setTimeout(() => {
+      if (pendingReset) return; // dblclick is in progress — don't re-zoom
+      const sx = chart.scales.x;
+      if (sx.min == null || sx.max == null) return;
+      // 1-second tolerance handles floating-point imprecision and sub-second drift.
+      if ((sx.max - sx.min) < (pre.max - pre.min) - 1) {
+        zoomedRange = { min: sx.min, max: sx.max };
+        resetBtn.style.display = '';  // show the Reset Zoom button
+      }
+    }, 0);
+  });
+
+  // ── Scroll-to-pan / pinch-to-zoom ────────────────────────────────────────
+  // Trackpad horizontal swipe (deltaX ≠ 0) pans the time window.
+  // Ctrl+scroll (macOS pinch gesture) zooms in/out around the cursor.
+  // We only preventDefault for gestures we consume so we don't hijack
+  // unrelated scrolling on the page.
+  chart.over.addEventListener('wheel', e => {
+    const n = buf.ts.length;
+    if (n === 0) return;
+
+    const horizScroll = Math.abs(e.deltaX) > 0;
+    const pinchZoom   = e.ctrlKey;
+    if (!horizScroll && !pinchZoom) return; // plain vertical scroll — ignore
+    e.preventDefault();
+
+    const opsMin  = opsStart() ?? buf.ts[0]; // scroll floor: start of current ops day
+    const dataMax = buf.ts[n - 1];
+    // When not zoomed, anchor the pan/zoom to the current live viewport
+    // (last VIEW_SEC seconds) rather than the full buffer, so the first
+    // scroll gesture pans within the 30-minute window as expected.
+    const range = zoomedRange || { min: Math.max(opsMin, dataMax - VIEW_SEC), max: dataMax };
+    const winSize = range.max - range.min;
+    if (winSize <= 0) return;
+
+    const chartW = chart.over.offsetWidth || chart.width || 400;
+    let newMin, newMax;
+
+    if (pinchZoom) {
+      // Zoom the window around the cursor position.
+      // On macOS, pinch-open (spread) → deltaY < 0 → factor < 1 → window shrinks (zoom in).
+      const factor     = Math.exp(e.deltaY * 0.008);
+      const cursorFrac = e.offsetX / chartW;
+      const anchor     = range.min + cursorFrac * winSize;
+      newMin = anchor - (anchor - range.min) * factor;
+      newMax = anchor + (range.max - anchor) * factor;
+      if (newMax - newMin < 5) return; // don't zoom past 5 seconds of data
+    } else {
+      // Pan: deltaX pixels → proportional fraction of the current window.
+      const panSec = (e.deltaX / chartW) * winSize;
+      newMin = range.min + panSec;
+      newMax = range.max + panSec;
+    }
+
+    // Clamp within ops day bounds — can't scroll before ops start or past latest point.
+    if (newMin < opsMin)  { newMax = Math.min(dataMax, newMax + (opsMin  - newMin)); newMin = opsMin; }
+    if (newMax > dataMax) { newMin = Math.max(opsMin,  newMin - (newMax - dataMax)); newMax = dataMax; }
+
+    zoomedRange = { min: newMin, max: newMax };
+    resetBtn.style.display = ''; // show Reset Zoom once we've panned/zoomed
+    pushToCharts();
+  }, { passive: false });
+}
+
+// ── Chart init ────────────────────────────────────────────────────────────────
+// All three charts share cursor sync key 'main' — hovering or dragging on one
+// chart moves the crosshair and propagates x-scale changes to the other two.
+// spanGaps: false causes null entries (gap sentinels) to break the line instead
+// of connecting across the dropout.
+
+function initTTd() {
+  charts.ttd = new uPlot({
+    width: chartWidth(), height: chartHeight(),
+    cursor: { drag: { x: true, y: false }, sync: { key: 'main' } },
+    scales: { x: xScale() },
+    axes:   [ xAxis(), yAxis('y', '°C', 3, C.text) ],
+    series: [
+      { value: (_u, v) => fmtLocalDateTime(v) },
+      { label: 'T',  stroke: C.t,  width: 2, spanGaps: false,
+        value: (_u, v) => v == null ? '' : `${v.toFixed(2)} °C` },
+      { label: 'Td', stroke: C.td, width: 2, spanGaps: false,
+        value: (_u, v) => v == null ? '' : `${v.toFixed(2)} °C` },
+    ],
+  }, [[], [], []], document.getElementById('chart-ttd'));
+}
+
+function initWind() {
+  charts.wind = new uPlot({
+    width: chartWidth(), height: chartHeight(),
+    cursor: { drag: { x: true, y: false }, sync: { key: 'main' } },
+    // Two independent y scales: wspd (m/s, autoscaled) and wdir (always 0–360°).
+    scales: { x: xScale(), wspd: {}, wdir: { range: [0, 360] } },
+    axes: [
+      xAxis(),
+      {
+        ...yAxis('wspd', 'm/s', 3, C.wspd),
+        grid: { show: true, stroke: C.grid, width: 1 },
+        // Generate exactly 5 evenly-spaced ticks across the current wspd range,
+        // snapped to the nearest 0.25 so values are always clean decimals.
+        splits: (u) => {
+          const s = u.scales.wspd;
+          const min = s.min ?? 0;
+          const max = s.max ?? 0;
+          const rawStep = (max - min) / 4 || 1;
+          const step = Math.max(0.25, Math.ceil(rawStep / 0.25) * 0.25);
+          return [0, 1, 2, 3, 4].map(i => +((min + i * step).toFixed(4)));
+        },
+      },
+      {
+        ...yAxis('wdir', 'degrees (˚)', 1, C.wdir),
+        grid: { show: true, stroke: C.grid, width: 1 },
+        values: (u, vals) => vals.map(v => v == null ? '' : v + '°'),
+        splits: () => [0, 90, 180, 270, 360], // cardinal directions only
+      },
+    ],
+    series: [
+      { value: (_u, v) => fmtLocalDateTime(v) },
+      { label: 'Speed', scale: 'wspd', stroke: C.wspd, width: 2, spanGaps: false,
+        value: (_u, v) => v == null ? '' : `${v.toFixed(2)} m/s` },
+      // Wind direction is drawn as dots rather than a connected line — a line
+      // through e.g. 350° → 10° would sweep visually through 180° (south), which
+      // is misleading. Dots make each discrete reading legible without false paths.
+      { label: 'Dir', scale: 'wdir', stroke: C.wdir,
+        paths: () => null, points: { show: true, size: 3, fill: C.wdir, stroke: C.wdir },
+        value: (_u, v) => v == null ? '' : `${v.toFixed(2)}°` },
+    ],
+  }, [[], [], []], document.getElementById('chart-wind'));
+}
+
+function initPressure() {
+  charts.pressure = new uPlot({
+    width: chartWidth(), height: chartHeight(),
+    cursor: { drag: { x: true, y: false }, sync: { key: 'main' } },
+    scales: { x: xScale() },
+    axes:   [ xAxis(), yAxis('y', 'hPa', 3, C.text) ],
+    series: [
+      { value: (_u, v) => fmtLocalDateTime(v) },
+      { label: 'Pressure', stroke: C.pressure, width: 2, spanGaps: false,
+        value: (_u, v) => v == null ? '' : `${v.toFixed(2)} hPa` },
+    ],
+  }, [[], []], document.getElementById('chart-pressure'));
+}
+
+// ── 30-second averages ────────────────────────────────────────────────────────
+
+// Wind direction is circular — a naive mean of [350°, 10°] gives 180° (wrong).
+// Convert each bearing to a unit vector, sum them, then take the resultant angle.
+function circMean(arr) {
+  let s = 0, c = 0;
+  for (const v of arr) { s += Math.sin(v * Math.PI / 180); c += Math.cos(v * Math.PI / 180); }
+  return ((Math.atan2(s, c) * 180 / Math.PI) + 360) % 360;
+}
+
+function updateAvgPills() {
+  const n = buf.ts.length;
+  const win = Math.min(AVG_WIN, n);
+  if (win === 0) return;
+  const sl   = k => buf[k].slice(n - win, n);
+  // Filter nulls before averaging so gap sentinels and missing sensor readings
+  // don't silently pull the average toward zero.
+  const mean = k => {
+    const vals = sl(k).filter(v => v != null);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+
+  const t    = mean('t');
+  const td   = mean('td');
+  const p    = mean('pressure');
+  const wspd = mean('wspd');
+  const wdirVals = sl('wdir').filter(v => v != null);
+  const wdir = wdirVals.length ? circMean(wdirVals) : null;
+
+  document.getElementById('avg-t').textContent        = t    != null ? `${t.toFixed(2)} °C / ${(t * 9/5 + 32).toFixed(2)} °F` : '--';
+  document.getElementById('avg-td').textContent       = td   != null ? `${td.toFixed(2)} °C / ${(td * 9/5 + 32).toFixed(2)} °F` : '--';
+  document.getElementById('avg-pressure').textContent = p    != null ? `${p.toFixed(2)} hPa` : '--';
+  document.getElementById('avg-wspd').textContent     = wspd != null ? `${wspd.toFixed(2)} m/s` : '--';
+  document.getElementById('avg-wdir').textContent     = wdir != null ? `${wdir.toFixed(2)}°` : '--';
+}
+
+// Scans backwards from the latest point to collect all indices within windowSec.
+// Returns { latest, idx[], t, td, wspd, p } where each field is {min, avg, max}
+// (or null if no non-null values exist for that field in the window).
+function computeStats(windowSec) {
+  const n = buf.ts.length;
+  if (n === 0) return null;
+  const latest = buf.ts[n - 1];
+  const cutoff = latest - windowSec;
+  const idx = [];
+  for (let i = n - 1; i >= 0; i--) {
+    if (buf.ts[i] < cutoff) break;
+    idx.push(i);
+  }
+  if (idx.length === 0) return null;
+  const vals = key => idx.map(i => buf[key][i]).filter(v => v != null);
+  const minAvgMax = key => {
+    const v = vals(key);
+    if (!v.length) return null;
+    const min = Math.min(...v);
+    const max = Math.max(...v);
+    const avg = v.reduce((a, b) => a + b, 0) / v.length;
+    return { min, avg, max };
+  };
+  return {
+    latest,
+    idx,
+    t: minAvgMax('t'),
+    td: minAvgMax('td'),
+    wspd: minAvgMax('wspd'),
+    p: minAvgMax('pressure'),
+  };
+}
+
+// Returns ΔP (hPa) between the current reading and the reading closest to 3 minutes ago.
+// Nearest-neighbour search handles gaps in the record rather than requiring an exact match.
+function pressureTrend(latestTs) {
+  const target = latestTs - 180;
+  let bestIdx = -1;
+  let bestDt = Infinity;
+  for (let i = buf.ts.length - 1; i >= 0; i--) {
+    const dt = Math.abs(buf.ts[i] - target);
+    if (dt < bestDt && buf.pressure[i] != null) {
+      bestDt = dt;
+      bestIdx = i;
+    }
+    if (buf.ts[i] < target - 60) break; // no point searching further back
+  }
+  if (bestIdx < 0) return null;
+  const latestP = buf.pressure[buf.pressure.length - 1];
+  if (latestP == null) return null;
+  return latestP - buf.pressure[bestIdx];
+}
+
+// Ratio of real data points to expected points (at 1 Hz) in the window, as a percentage.
+// duration is clamped to how long we've actually been collecting data so startup doesn't
+// artificially lower the score.
+function completeness(windowSec) {
+  const n = buf.ts.length;
+  if (n === 0) return null;
+  const latest = buf.ts[n - 1];
+  const cutoff = latest - windowSec;
+  let count = 0;
+  for (let i = n - 1; i >= 0; i--) {
+    if (buf.ts[i] < cutoff) break;
+    if (isRealPointAt(i)) count++;
+  }
+  const duration = Math.min(windowSec, latest - Math.max(cutoff, buf.ts[0]) + 1);
+  const expected = Math.max(1, Math.round(duration));
+  return Math.min(100, (count / expected) * 100);
+}
+
+function updateStatusSummary() {
+  const n = buf.ts.length;
+  if (n === 0) return;
+  const latest = buf.ts[n - 1];
+
+  document.getElementById('stat-last').textContent =
+    new Date(latest * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  document.getElementById('stat-gaps').textContent = `${gapCountToday}`;
+  const comp = completeness(10 * 60);
+  document.getElementById('stat-comp').textContent = comp == null ? '--' : `${comp.toFixed(1)} %`;
+  const dP = pressureTrend(latest);
+  document.getElementById('stat-ptrend').textContent = dP == null ? '--' : `${dP.toFixed(2)} hPa`;
+}
+
+// ── Max wind tracker ──────────────────────────────────────────────────────────
+// Checks a single incoming point against the current max. Only considers
+// points after resetTs (user-defined reset) or opsStart (ops day boundary).
+function updateMaxWind(p) {
+  if (p.wspd == null) return;
+  const floor = maxWind.resetTs ?? opsStart() ?? 0;
+  if (p.ts < floor) return;
+  if (maxWind.wspd == null || p.wspd > maxWind.wspd) {
+    maxWind.wspd = p.wspd;
+    maxWind.ts   = p.ts;
+    maxWind.lat  = p.lat ?? null;
+    maxWind.lon  = p.lon ?? null;
+    renderMaxWind();
+  }
+}
+
+// Refreshes the max wind card DOM from the current maxWind state.
+function renderMaxWind() {
+  const fmt2 = v => v != null ? v.toFixed(2) : '--';
+  document.getElementById('mw-wspd').textContent =
+    maxWind.wspd != null ? `${fmt2(maxWind.wspd)} m/s` : '--';
+  document.getElementById('mw-time').textContent =
+    maxWind.ts != null ? new Date(maxWind.ts * 1000).toISOString().slice(11, 19) + ' UTC' : '--';
+  const lat = maxWind.lat, lon = maxWind.lon;
+  document.getElementById('mw-lat').textContent =
+    lat != null ? `${Math.abs(lat).toFixed(4)}° ${lat >= 0 ? 'N' : 'S'}` : '--';
+  document.getElementById('mw-lon').textContent =
+    lon != null ? `${Math.abs(lon).toFixed(4)}° ${lon >= 0 ? 'E' : 'W'}` : '--';
+}
+
+// ── Data push ─────────────────────────────────────────────────────────────────
+// Sends the current buffer to all three charts and updates the x (and y) scales.
+// setData is called with resetScales=false so uPlot doesn't auto-fit the axes —
+// we control all scales explicitly via setScale below.
+function pushToCharts() {
+  if (!charts.ttd) return; // deferred init not yet complete
+  charts.ttd.setData([buf.ts, buf.t, buf.td], false);
+  charts.wind.setData([buf.ts, buf.wspd, buf.wdir], false);
+  charts.pressure.setData([buf.ts, buf.pressure], false);
+
+  if (zoomedRange) {
+    // Zoomed/panned mode: hold the user's locked window on every incoming point.
+    for (const c of Object.values(charts)) c.setScale('x', zoomedRange);
+  } else if (buf.ts.length >= 1) {
+    // Live mode: show a rolling VIEW_SEC-wide window ending at the latest point.
+    // buf.ts is chronological so the last element is always the newest timestamp.
+    const xMax = buf.ts[buf.ts.length - 1];
+    const xMin = Math.max(buf.ts[0], xMax - VIEW_SEC);
+    for (const c of Object.values(charts)) c.setScale('x', { min: xMin, max: xMax === xMin ? xMin + 60 : xMax });
+
+    // Compute y ranges over only the visible window so the axes stay tight
+    // on what's actually on screen, not the full 2-hour buffer.
+    const tRange  = paddedRange(minMaxVisible('t',        xMin, xMax), 0.08, 0.5);
+    const tdRange = paddedRange(minMaxVisible('td',       xMin, xMax), 0.08, 0.5);
+    if (tRange && tdRange) {
+      charts.ttd.setScale('y', {
+        min: Math.min(tRange.min, tdRange.min),
+        max: Math.max(tRange.max, tdRange.max),
+      });
+    }
+    const wspdRange = paddedRange(minMaxVisible('wspd',     xMin, xMax), 0.15, 0.8);
+    if (wspdRange) {
+      const min = 0;
+      const step = niceStep((wspdRange.max - min) / 4, 0.25);
+      const max = min + step * 4;
+      charts.wind.setScale('wspd', { min, max });
+    }
+    const pRange = paddedRange(minMaxVisible('pressure', xMin, xMax), 0.04, 0.8);
+    if (pRange) charts.pressure.setScale('y', pRange);
+  }
+}
+
+// Drops the oldest points when the buffer exceeds MAX_PTS, keeping memory bounded.
+function trimBuf() {
+  if (buf.ts.length > MAX_PTS) {
+    const excess = buf.ts.length - MAX_PTS;
+    for (const k of Object.keys(buf)) buf[k].splice(0, excess);
+  }
+}
+
+// Inserts a null-valued sentinel at timestamp ts. uPlot interprets nulls in a
+// series as line breaks (when spanGaps: false), so gaps appear as visual breaks
+// rather than long straight lines bridging a dropout.
+function pushGap(ts) {
+  buf.ts.push(ts);
+  buf.t.push(null);
+  buf.td.push(null);
+  buf.wspd.push(null);
+  buf.wdir.push(null);
+  buf.pressure.push(null);
+  buf.compass_dir.push(null);
+  buf.lat.push(null);
+  buf.lon.push(null);
+}
+
+// Returns true if index i holds a real sensor reading rather than a gap sentinel.
+// Used by completeness() to count valid points without counting inserted nulls.
+function isRealPointAt(i) {
+  return buf.t[i] != null || buf.td[i] != null || buf.wspd[i] != null ||
+         buf.wdir[i] != null || buf.pressure[i] != null || buf.compass_dir[i] != null;
+}
+
+// Appends one data point to the buffer, inserting a gap sentinel first if the
+// previous reading is ≥GAP_SEC old. Also tracks the gap count and resets it
+// when the UTC day rolls over.
+function appendPoint(p) {
+  const dayStart = Math.floor(p.ts / 86400) * 86400;
+  if (gapDayStart == null || dayStart !== gapDayStart) {
+    // New UTC day — reset gap counter and last-seen timestamp.
+    gapDayStart = dayStart;
+    gapCountToday = 0;
+    lastRealTs = null;
+  }
+  if (lastRealTs != null && p.ts - lastRealTs >= GAP_SEC) {
+    gapCountToday++;
+  }
+  lastRealTs = p.ts;
+
+  const n = buf.ts.length;
+  if (n > 0) {
+    const last = buf.ts[n - 1];
+    if (p.ts - last >= GAP_SEC) {
+      // Place the sentinel one second after the last point so the gap has a
+      // visible timestamp on the x-axis rather than collapsing to a point.
+      pushGap(last + 1);
+    }
+  }
+  buf.ts.push(p.ts);
+  buf.t.push(p.t);
+  buf.td.push(p.td);
+  buf.wspd.push(p.wspd);
+  buf.wdir.push(p.wdir);
+  buf.pressure.push(p.pressure);
+  buf.compass_dir.push(p.compass_dir);
+  buf.lat.push(p.lat ?? null);
+  buf.lon.push(p.lon ?? null);
+}
+
+// ── Compass ───────────────────────────────────────────────────────────────────
+// Full canvas redraw on every update. At 1 Hz the cost is negligible.
+// Pass deg=null to draw just the static rose (used on init before first data).
+function drawCompass(deg) {
+  const canvas = document.getElementById('compass-canvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2, cy = H / 2, R = Math.min(cx, cy) - 22;
+
+  ctx.clearRect(0, 0, W, H);
+
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+  ctx.fillStyle = '#181825'; ctx.fill();
+  ctx.strokeStyle = '#313244'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  for (let i = 0; i < 36; i++) {
+    const a = (i * 10 - 90) * Math.PI / 180;
+    const cardinal = i % 9 === 0;
+    const thirty   = i % 3 === 0;
+    const len = cardinal ? 9 : 4;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * (R - 1),       cy + Math.sin(a) * (R - 1));
+    ctx.lineTo(cx + Math.cos(a) * (R - 1 - len), cy + Math.sin(a) * (R - 1 - len));
+    ctx.strokeStyle = cardinal ? '#45475a' : '#313244';
+    ctx.lineWidth = cardinal ? 1.5 : 0.75;
+    ctx.stroke();
+
+    if (thirty) {
+      ctx.font = '9px ui-monospace, monospace';
+      ctx.fillStyle = '#c5cbe5';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`${i * 10}`, cx + Math.cos(a) * (R + 11), cy + Math.sin(a) * (R + 11));
+    }
+  }
+
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const [lbl, d] of [['N', 0], ['E', 90], ['S', 180], ['W', 270]]) {
+    const a = (d - 90) * Math.PI / 180;
+    ctx.fillStyle = d === 0 ? '#f38ba8' : '#a6adc8';
+    ctx.fillText(lbl, cx + Math.cos(a) * (R - 18), cy + Math.sin(a) * (R - 18));
+  }
+
+  if (deg == null) return;
+
+  const a = (deg - 90) * Math.PI / 180;
+  const dotR = 3.5;
+  const tipX  = cx + Math.cos(a) * (R * 0.65);
+  const tipY  = cy + Math.sin(a) * (R * 0.65);
+  const stemX = cx + Math.cos(a) * (dotR + 1);
+  const stemY = cy + Math.sin(a) * (dotR + 1);
+
+  ctx.lineWidth = 2.5; ctx.strokeStyle = '#fab387';
+  ctx.beginPath(); ctx.moveTo(stemX, stemY); ctx.lineTo(tipX, tipY); ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX + Math.cos(a + 2.6) * 9, tipY + Math.sin(a + 2.6) * 9);
+  ctx.lineTo(tipX + Math.cos(a - 2.6) * 9, tipY + Math.sin(a - 2.6) * 9);
+  ctx.closePath(); ctx.fillStyle = '#fab387'; ctx.fill();
+
+  ctx.beginPath(); ctx.arc(cx, cy, dotR, 0, 2 * Math.PI);
+  ctx.fillStyle = '#cdd6f4'; ctx.fill();
+}
+
+// ── Current values ────────────────────────────────────────────────────────────
+// Updates the sidebar "Current" card and compass. fmt2/fmtTF return '--' for
+// null fields so a partial sensor outage doesn't crash the display.
+function updateCurrentValues(p) {
+  const fmt2 = v => v != null ? v.toFixed(2) : '--';
+  const fmtTF = v => v != null ? `${v.toFixed(2)} °C / ${(v * 9/5 + 32).toFixed(2)} °F` : '--';
+
+  document.getElementById('cv-t').textContent        = fmtTF(p.t);
+  document.getElementById('cv-td').textContent       = fmtTF(p.td);
+  document.getElementById('cv-pressure').textContent = p.pressure != null ? `${fmt2(p.pressure)} hPa` : '--';
+  document.getElementById('cv-wspd').textContent     = p.wspd     != null ? `${fmt2(p.wspd)} m/s`     : '--';
+  document.getElementById('cv-wdir').textContent     = p.wdir     != null ? `${fmt2(p.wdir)}°`         : '--';
+
+  drawCompass(p.compass_dir);
+  document.getElementById('compass-deg').textContent = p.compass_dir != null ? `${fmt2(p.compass_dir)}°` : '---°';
+  document.getElementById('last-update').textContent =
+    new Date(p.ts * 1000).toISOString().slice(11, 19) + ' UTC';
+}
+
+// ── Reset Zoom button ─────────────────────────────────────────────────────────
+resetBtn.onclick = resetZoom;
+
+// ── Max wind reset button ─────────────────────────────────────────────────────
+// Clears the recorded max and sets resetTs to the current latest timestamp so
+// only future incoming points are candidates for the new max.
+document.getElementById('maxwind-reset-btn').onclick = () => {
+  const n = buf.ts.length;
+  maxWind.resetTs = n > 0 ? buf.ts[n - 1] : null;
+  maxWind.wspd = null; maxWind.ts = null; maxWind.lat = null; maxWind.lon = null;
+  renderMaxWind();
+};
+
+// ── Live / Pause ──────────────────────────────────────────────────────────────
+const liveBtn = document.getElementById('live-btn');
+liveBtn.onclick = () => {
+  isLive = !isLive;
+  if (isLive) {
+    liveBtn.textContent = 'Pause';
+    liveBtn.classList.remove('paused');
+    // Resuming live also exits zoom so the chart snaps back to the present.
+    resetZoom();
+  } else {
+    liveBtn.textContent = 'Live';
+    liveBtn.classList.add('paused');
+  }
+};
+
+// ── SSE connection ────────────────────────────────────────────────────────────
+const dot = document.getElementById('conn-dot');
+
+function connect() {
+  const es = new EventSource('/stream');
+  es.onopen  = () => dot.classList.remove('off');
+  // On any error, close the connection and retry after 5 s — handles brief
+  // network blips and server restarts without needing a page reload.
+  es.onerror = () => { dot.classList.add('off'); es.close(); setTimeout(connect, 5000); };
+
+  es.onmessage = e => {
+    const p = JSON.parse(e.data);
+    // /initial and /stream can race — queue points that arrive before the
+    // history fetch resolves, then replay them in appendPoint order after.
+    if (!initialLoaded) { pendingPoints.push(p); return; }
+    p.ts = normTs(p.ts);
+    appendPoint(p);
+    trimBuf();
+    updateMaxWind(p);
+    updateCurrentValues(p);
+    // Recompute 30-second averages every AVG_WIN points rather than every
+    // second to avoid unnecessary DOM churn at 1 Hz.
+    if (buf.ts.length % AVG_WIN === 0) updateAvgPills();
+    updateStatusSummary();
+    if (isLive) pushToCharts();
+  };
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+// Draw the static compass rose immediately (no data needed).
+drawCompass(null);
+
+// Defer chart creation until after the first layout pass so that the flex-1
+// .chart-wrap elements have their CSS-determined clientWidth/clientHeight
+// available for chartWidth() and chartHeight() to read.
+requestAnimationFrame(() => {
+  initTTd();
+  initWind();
+  initPressure();
+  addZoomListeners(charts.ttd);
+  addZoomListeners(charts.wind);
+  addZoomListeners(charts.pressure);
+
+  // ── Responsive resize ──────────────────────────────────────────────────────
+  // Refit all charts when the charts column changes size (window resize, etc.).
+  // pushToCharts re-asserts the correct scale after the resize.
+  const resizeObserver = new ResizeObserver(() => {
+    const w = chartWidth();
+    const h = chartHeight();
+    for (const c of Object.values(charts)) c.setSize({ width: w, height: h });
+    pushToCharts();
+  });
+  resizeObserver.observe(document.querySelector('#charts-col'));
+
+  // ── Load history ────────────────────────────────────────────────────────────
+  // Fetches up to 2 hours of pre-existing data so the charts aren't empty on load.
+  // Any SSE points that arrived during the fetch are held in pendingPoints and
+  // appended here in sequence so there are no gaps or duplicates.
+  fetch('/initial')
+    .then(r => r.json())
+    .then(d => {
+      // Rebuild buffer with gap detection
+      buf = { ts: [], t: [], td: [], wspd: [], wdir: [], pressure: [], compass_dir: [], lat: [], lon: [] };
+      lastRealTs = null;
+      gapCountToday = 0;
+      gapDayStart = null;
+      if (Array.isArray(d.ts)) {
+        for (let i = 0; i < d.ts.length; i++) {
+          const p = {
+            ts: normTs(d.ts[i]),
+            t: d.t[i],
+            td: d.td[i],
+            wspd: d.wspd[i],
+            wdir: d.wdir[i],
+            pressure: d.pressure[i],
+            compass_dir: d.compass_dir[i],
+            lat: d.lat ? d.lat[i] : null,
+            lon: d.lon ? d.lon[i] : null,
+          };
+          appendPoint(p);
+        }
+      }
+      for (const p of pendingPoints) {
+        p.ts = normTs(p.ts);
+        appendPoint(p);
+      }
+      pendingPoints = [];
+      initialLoaded = true;
+      trimBuf();
+      // Scan the loaded buffer to find max wind since the ops day start.
+      for (let i = 0; i < buf.ts.length; i++) {
+        updateMaxWind({ ts: buf.ts[i], wspd: buf.wspd[i], lat: buf.lat[i], lon: buf.lon[i] });
+      }
+      zoomedRange = null;
+      pushToCharts();
+      updateAvgPills();
+      updateStatusSummary();
+      if (buf.ts.length > 0) {
+        const i = buf.ts.length - 1;
+        updateCurrentValues({
+          ts: buf.ts[i], t: buf.t[i], td: buf.td[i],
+          wspd: buf.wspd[i], wdir: buf.wdir[i],
+          pressure: buf.pressure[i], compass_dir: buf.compass_dir[i],
+        });
+      }
+    });
+
+  // ── SSE stream ──────────────────────────────────────────────────────────────
+  connect();
+});
+</script>
+</body>
+</html>
