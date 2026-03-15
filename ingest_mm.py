@@ -14,6 +14,10 @@ from datetime import timezone
 from html.parser import HTMLParser
 import json
 
+def _log(msg):
+    ts = dt.datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    print(f'[{ts}] [ingest] {msg}', flush=True)
+
 def _load_config():
     cfg_path = Path(__file__).parent / 'mesoview.config.json'
     if not cfg_path.exists():
@@ -22,13 +26,13 @@ def _load_config():
         with open(cfg_path) as f:
             return json.load(f) or {}
     except Exception as e:
-        print(f'Warning: could not read config {cfg_path}: {e}')
+        _log(f'Warning: could not read config {cfg_path}: {e}')
         return {}
 
 _CFG = _load_config()
 
 # set vehicle-specific variables
-DATA_DIR = Path(_CFG.get('data_dir', str(Path.home() / 'data' / 'raw' / 'mesonet')))
+DATA_DIR = Path(_CFG.get('data_dir', str(Path.home() / 'data' / 'raw' / 'mesonet'))).expanduser()
 IP = _CFG.get('logger_ip', '192.168.4.6')
 
 MAX_TRIES = int(_CFG.get('ingest_retry_max', 100))
@@ -77,10 +81,10 @@ def fetch_record(ip, max_tries=100, retry_delay=5):
 
         except Exception as e:
             if attempt < max_tries:
-                print(f'Read attempt {attempt} failed ({e}). Retrying in {retry_delay}s...', flush=True)
+                _log(f'Read attempt {attempt} failed ({e}). Retrying in {retry_delay}s...')
                 time.sleep(retry_delay)
             else:
-                print(f'Failed to read data after {max_tries} attempts. Terminating.')
+                _log(f'Failed to read data after {max_tries} attempts. Terminating.')
                 sys.exit(1)
 
 

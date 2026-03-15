@@ -45,7 +45,9 @@ def _load_config() -> dict:
         with open(cfg_path) as f:
             return json.load(f) or {}
     except Exception as e:
-        print(f'Warning: could not read config {cfg_path}: {e}', flush=True)
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        print(f'[{ts}] [supervisor] Warning: could not read config {cfg_path}: {e}', flush=True)
         return {}
 
 
@@ -60,10 +62,8 @@ def _open_log(log_dir: Path) -> tuple[object, date]:
 
 def _log(fh, msg: str) -> None:
     from datetime import datetime, timezone
-    line = f'[{datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}] [supervisor] {msg}'
-    print(line, file=fh, flush=True)
-    # Also echo to the original stderr so interactive runs stay visible.
-    print(line, file=sys.__stderr__, flush=True)
+    ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    print(f'[{ts}] [supervisor] {msg}', file=fh, flush=True)
 
 
 def _split_cmd(cmd: str) -> List[str]:
@@ -112,7 +112,7 @@ class Child:
 def main() -> int:
     cfg = _load_config()
     default_log_dir = Path.home() / 'mesoview_logs'
-    log_dir = Path(cfg.get('log_dir', str(default_log_dir)))
+    log_dir = Path(cfg.get('log_dir', str(default_log_dir))).expanduser()
 
     log_fh, log_date = _open_log(log_dir)
     _log(log_fh, f'starting — log: {log_fh.name}')

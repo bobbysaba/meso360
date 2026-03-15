@@ -20,6 +20,7 @@
       --wspd:     #a6e3a1;
       --wdir:     #fab387;
       --pressure: #cba6f7;
+      --thetae:   #f9e2af;
     }
 
     body {
@@ -186,6 +187,7 @@
     .cv-pressure .cv-val { color: var(--pressure); }
     .cv-wspd     .cv-val { color: var(--wspd); }
     .cv-wdir     .cv-val { color: var(--wdir); }
+    .cv-thetae   .cv-val { color: var(--thetae); }
 
     /* ── Status panel ───────────────────────────────────────── */
     .status-grid {
@@ -426,6 +428,10 @@
         <span class="cv-label">Wind Dir</span>
         <span class="cv-val" id="cv-wdir">--</span>
       </div>
+      <div class="cv-row cv-thetae">
+        <span class="cv-label">θ<sub>e</sub></span>
+        <span class="cv-val" id="cv-thetae">--</span>
+      </div>
     </div>
     <div class="card">
       <div class="card-title">30‑second averages</div>
@@ -448,6 +454,10 @@
       <div class="cv-row cv-wdir">
         <span class="cv-label">Wind Dir</span>
         <span class="cv-val" id="avg-wdir">--</span>
+      </div>
+      <div class="cv-row cv-thetae">
+        <span class="cv-label">θ<sub>e</sub></span>
+        <span class="cv-val" id="avg-thetae">--</span>
       </div>
     </div>
 
@@ -1020,6 +1030,19 @@ function circMean(arr) {
   return ((Math.atan2(s, c) * 180 / Math.PI) + 360) % 360;
 }
 
+// Equivalent potential temperature — Bolton (1980) eqs. 10, 15, 38.
+// Inputs: T and Td in °C, pressure in hPa. Returns θe in K, or null on bad inputs.
+function calcThetaE(t_c, td_c, p_hpa) {
+  if (t_c == null || td_c == null || p_hpa == null) return null;
+  const T  = t_c  + 273.15;                                          // K
+  const Td = td_c + 273.15;                                          // K
+  const e  = 6.112 * Math.exp((17.67 * td_c) / (td_c + 243.5));    // vapor pressure (hPa)
+  const r  = 0.622 * e / (p_hpa - e);                               // mixing ratio (kg/kg)
+  const TL = 56 + 1 / (1 / (Td - 56) - Math.log(T / Td) / 800);    // LCL temp (K)
+  return T * Math.pow(1000 / p_hpa, 0.2854 * (1 - 0.28 * r))
+           * Math.exp(r * (1 + 0.81 * r) * (3376 / TL - 2.54));     // θe (K)
+}
+
 function updateAvgPills() {
   const n = buf.ts.length;
   const win = Math.min(AVG_WIN, n);
@@ -1039,11 +1062,14 @@ function updateAvgPills() {
   const wdirVals = sl('wdir').filter(v => v != null);
   const wdir = wdirVals.length ? circMean(wdirVals) : null;
 
+  const the = calcThetaE(t, td, p);
+
   document.getElementById('avg-t').textContent        = t    != null ? `${t.toFixed(2)} °C / ${(t * 9/5 + 32).toFixed(2)} °F` : '--';
   document.getElementById('avg-td').textContent       = td   != null ? `${td.toFixed(2)} °C / ${(td * 9/5 + 32).toFixed(2)} °F` : '--';
   document.getElementById('avg-pressure').textContent = p    != null ? `${p.toFixed(2)} hPa` : '--';
   document.getElementById('avg-wspd').textContent     = wspd != null ? `${wspd.toFixed(2)} m/s` : '--';
   document.getElementById('avg-wdir').textContent     = wdir != null ? `${wdir.toFixed(2)}°` : '--';
+  document.getElementById('avg-thetae').textContent   = the  != null ? `${the.toFixed(1)} K` : '--';
 }
 
 // Scans backwards from the latest point to collect all indices within windowSec.
@@ -1357,11 +1383,14 @@ function updateCurrentValues(p) {
   const fmt2 = v => v != null ? v.toFixed(2) : '--';
   const fmtTF = v => v != null ? `${v.toFixed(2)} °C / ${(v * 9/5 + 32).toFixed(2)} °F` : '--';
 
+  const the = calcThetaE(p.t, p.td, p.pressure);
+
   document.getElementById('cv-t').textContent        = fmtTF(p.t);
   document.getElementById('cv-td').textContent       = fmtTF(p.td);
   document.getElementById('cv-pressure').textContent = p.pressure != null ? `${fmt2(p.pressure)} hPa` : '--';
   document.getElementById('cv-wspd').textContent     = p.wspd     != null ? `${fmt2(p.wspd)} m/s`     : '--';
   document.getElementById('cv-wdir').textContent     = p.wdir     != null ? `${fmt2(p.wdir)}°`         : '--';
+  document.getElementById('cv-thetae').textContent   = the        != null ? `${the.toFixed(1)} K`      : '--';
 
   drawCompass(p.compass_dir);
   document.getElementById('compass-deg').textContent = p.compass_dir != null ? `${fmt2(p.compass_dir)}°` : '---°';
@@ -1499,7 +1528,7 @@ requestAnimationFrame(() => {
             wspd: d.wspd[i],
             wdir: d.wdir[i],
             pressure: d.pressure[i],
-            compass_dir: d.compass_dir[i],
+            compass_dir: d.compass_dir ? d.compass_dir[i] : null,
             lat: d.lat ? d.lat[i] : null,
             lon: d.lon ? d.lon[i] : null,
           };

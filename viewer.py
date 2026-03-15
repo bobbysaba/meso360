@@ -72,6 +72,11 @@ def _version_worker():
 threading.Thread(target=_version_worker, daemon=True).start()
 
 # ── Config ───────────────────────────────────────────────────────────────────
+def _log(msg):
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    print(f'[{ts}] [viewer] {msg}', flush=True)
+
 def _load_config():
     cfg_path = Path(__file__).parent / 'mesoview.config.json'
     if not cfg_path.exists():
@@ -80,13 +85,13 @@ def _load_config():
         with open(cfg_path) as f:
             return json.load(f) or {}
     except Exception as e:
-        print(f'Warning: could not read config {cfg_path}: {e}')
+        _log(f'Warning: could not read config {cfg_path}: {e}')
         return {}
 
 _CFG = _load_config()
 
 # Update DATA_DIR to match DATA_DIR in ingest_mm.py
-DATA_DIR      = Path(_CFG.get('data_dir', str(Path.home() / 'data' / 'raw' / 'mesonet')))
+DATA_DIR      = Path(_CFG.get('data_dir', str(Path.home() / 'data' / 'raw' / 'mesonet'))).expanduser()
 WINDOW        = 600          # records of history served on /initial (~10 min)
 UPLOT_VERSION = '1.6.31'
 HTTP_PORT     = int(_CFG.get('http_port', 8080))
@@ -109,11 +114,11 @@ def ensure_uplot():
         dst = STATIC / fname
         if not dst.exists():
             try:
-                print(f'Downloading {fname}...')
+                _log(f'Downloading {fname}...')
                 urllib.request.urlretrieve(url, dst)
-                print(f'  saved to {dst}')
+                _log(f'Saved {dst}')
             except Exception as e:
-                print(f'  Warning: could not fetch {fname}: {e}')
+                _log(f'Warning: could not fetch {fname}: {e}')
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def today_file():
@@ -177,7 +182,7 @@ def get_local_ip():
 def advertise_mdns(hostname='mesoview', port=8080):
     """Advertise http://<hostname>.local:<port> via mDNS/Bonjour."""
     if Zeroconf is None or ServiceInfo is None:
-        print('mDNS: zeroconf not installed; skipping .local advertisement')
+        _log('mDNS: zeroconf not installed; skipping .local advertisement')
         return None
 
     ip = get_local_ip()
@@ -197,7 +202,7 @@ def advertise_mdns(hostname='mesoview', port=8080):
     try:
         zc.register_service(info)
     except Exception as e:
-        print(f'mDNS: failed to register service: {e}')
+        _log(f'mDNS: failed to register service: {e}')
         try:
             zc.close()
         except Exception:
@@ -212,7 +217,7 @@ def advertise_mdns(hostname='mesoview', port=8080):
             pass
 
     atexit.register(_cleanup)
-    print(f'mDNS: advertised http://{hostname}.local:{port} -> {ip}:{port}')
+    _log(f'mDNS: advertised http://{hostname}.local:{port} -> {ip}:{port}')
     return zc
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -245,7 +250,7 @@ def initial():
             if cutoff <= p['ts'] < start_ts:
                 for k, v in p.items():
                     result[k].append(v)
-        print(f'TEST initial: start_ts={start_ts}, cutoff={cutoff}, points={len(result["ts"])}')
+        _log(f'TEST initial: start_ts={start_ts}, cutoff={cutoff}, points={len(result["ts"])}')
         return jsonify(result)
     now = datetime.now(timezone.utc)
     cutoff = now.timestamp() - 2 * 60 * 60
@@ -288,7 +293,7 @@ def stream():
             if start_ts > data[-1]['ts']:
                 start_ts = data[-1]['ts']
             data = [p for p in data if p['ts'] >= start_ts]
-        print(f'TEST stream points={len(data)} (offset={TEST_START_OFFSET}s)')
+        _log(f'TEST stream points={len(data)} (offset={TEST_START_OFFSET}s)')
         while True:
             for p in data:
                 yield f'data: {json.dumps(p)}\n\n'
@@ -377,15 +382,15 @@ def update():
 if __name__ == '__main__':
     ensure_uplot()
     if TEST_MODE:
-        print(f'TEST MODE — replaying {TEST_FILE}')
+        _log(f'TEST MODE — replaying {TEST_FILE}')
     else:
-        print(f'Data directory: {DATA_DIR}')
+        _log(f'Data directory: {DATA_DIR}')
     advertise_mdns(hostname=MDNS_HOSTNAME, port=HTTP_PORT)
     local_ip = get_local_ip()
     url = f'http://{local_ip}:{HTTP_PORT}'
-    print(f'Starting MM Viewer — open {url}')
+    _log(f'Starting MM Viewer — open {url}')
     try:
         webbrowser.open(url, new=2)
     except Exception as e:
-        print(f'Warning: could not open browser: {e}')
+        _log(f'Warning: could not open browser: {e}')
     app.run(host='0.0.0.0', port=HTTP_PORT, debug=False, threaded=True)

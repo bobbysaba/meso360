@@ -245,7 +245,7 @@ mesoview/
 ├── supervisor.py          # start here — runs ingest + viewer, auto-restarts both
 ├── ingest_mm.py           # fetches data from the datalogger at 1 Hz
 ├── viewer.py              # Flask SSE server + web dashboard
-├── mesoview.config.json   # edit this for your setup
+├── mesoview.config.example.json   # copy to mesoview.config.json and edit
 ├── environment.yml        # conda environment spec
 ├── requirements.txt       # pip fallback
 ├── templates/
