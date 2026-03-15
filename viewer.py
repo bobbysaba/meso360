@@ -27,6 +27,44 @@ TEST_FILE = Path(__file__).parent / 'test_data' / 'test.txt'
 
 app = Flask(__name__)
 
+# ── Version cache (populated by background thread) ───────────────────────────
+_ver_cache: dict = {'commit': None, 'dirty': False, 'update_available': False}
+_ver_lock = threading.Lock()
+
+def _version_worker():
+    """Fetch git status/remote once immediately, then every 5 minutes."""
+    repo_dir = Path(__file__).parent
+    while True:
+        try:
+            commit = subprocess.run(
+                ['git', 'rev-parse', '--short', 'HEAD'],
+                cwd=repo_dir, capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            dirty = bool(subprocess.run(
+                ['git', 'status', '--porcelain'],
+                cwd=repo_dir, capture_output=True, text=True, timeout=5,
+            ).stdout.strip())
+            subprocess.run(
+                ['git', 'fetch', '--quiet'],
+                cwd=repo_dir, capture_output=True, text=True, timeout=15,
+            )
+            local_sha = subprocess.run(
+                ['git', 'rev-parse', 'HEAD'],
+                cwd=repo_dir, capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            remote_sha = subprocess.run(
+                ['git', 'rev-parse', '@{u}'],
+                cwd=repo_dir, capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            update_available = bool(local_sha and remote_sha and local_sha != remote_sha)
+            with _ver_lock:
+                _ver_cache.update(commit=commit, dirty=dirty, update_available=update_available)
+        except Exception:
+            pass
+        time.sleep(300)
+
+threading.Thread(target=_version_worker, daemon=True).start()
+
 # ── Config ───────────────────────────────────────────────────────────────────
 # Update DATA_DIR to match DATA_DIR in ingest_mm.py
 DATA_DIR      = Path.home() / 'data' / 'raw' / 'mesonet'
@@ -224,20 +262,9 @@ def stream():
 
 @app.route('/version')
 def version():
-    """Return the current git commit hash and whether the working tree is dirty."""
-    repo_dir = Path(__file__).parent
-    try:
-        commit = subprocess.run(
-            ['git', 'rev-parse', '--short', 'HEAD'],
-            cwd=repo_dir, capture_output=True, text=True, timeout=5,
-        ).stdout.strip()
-        dirty = bool(subprocess.run(
-            ['git', 'status', '--porcelain'],
-            cwd=repo_dir, capture_output=True, text=True, timeout=5,
-        ).stdout.strip())
-    except Exception:
-        return jsonify({'commit': None, 'dirty': False})
-    return jsonify({'commit': commit, 'dirty': dirty})
+    """Return cached git status (populated by background thread)."""
+    with _ver_lock:
+        return jsonify(dict(_ver_cache))
 
 @app.route('/update', methods=['POST'])
 def update():

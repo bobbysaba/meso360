@@ -70,7 +70,9 @@
       transition: background 0.3s;
       flex-shrink: 0;
     }
-    #conn-dot.off { background: var(--t); }
+    #conn-dot.stale { background: var(--wdir); }
+    #conn-dot.off   { background: var(--t); }
+    #last-update.stale { color: var(--wdir); }
 
     #live-btn, #reset-btn {
       background: var(--muted);
@@ -313,7 +315,7 @@
       z-index: 100;
       display: flex;
       flex-direction: column;
-      align-items: flex-end;
+      align-items: center;
       gap: 6px;
     }
 
@@ -353,7 +355,12 @@
       font-size: 0.72rem;
       transition: border-color 0.2s, color 0.2s;
     }
+    #update-btn.has-update {
+      color: #cfe2ff;
+      border-color: #cfe2ff;
+    }
     #update-btn:hover:not(:disabled) { border-color: var(--subtext); color: var(--text); }
+    #update-btn.has-update:hover:not(:disabled) { border-color: #ffffff; color: #ffffff; }
     #update-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   </style>
@@ -1256,7 +1263,18 @@ liveBtn.onclick = () => {
 };
 
 // ── SSE connection ────────────────────────────────────────────────────────────
-const dot = document.getElementById('conn-dot');
+const dot        = document.getElementById('conn-dot');
+const lastUpdEl  = document.getElementById('last-update');
+const STALE_MS   = 30_000;   // flag stale after 30 s without a data point
+let   lastDataAt = null;      // wall-clock ms of last real SSE message
+
+// Watchdog: runs every 5 s, marks dot+timestamp amber if data has gone quiet
+setInterval(() => {
+  if (lastDataAt === null) return;  // no data yet since page load
+  const stale = (Date.now() - lastDataAt) > STALE_MS;
+  dot.classList.toggle('stale', stale);
+  lastUpdEl.classList.toggle('stale', stale);
+}, 5000);
 
 function connect() {
   const es = new EventSource('/stream');
@@ -1266,6 +1284,9 @@ function connect() {
   es.onerror = () => { dot.classList.add('off'); es.close(); setTimeout(connect, 5000); };
 
   es.onmessage = e => {
+    lastDataAt = Date.now();
+    dot.classList.remove('stale');
+    lastUpdEl.classList.remove('stale');
     const p = JSON.parse(e.data);
     // /initial and /stream can race — queue points that arrive before the
     // history fetch resolves, then replay them in appendPoint order after.
@@ -1370,11 +1391,16 @@ requestAnimationFrame(() => {
 fetch('/version')
   .then(r => r.json())
   .then(data => {
+    const btn = document.getElementById('update-btn');
     if (data.dirty) {
       document.getElementById('dev-badge').style.display = 'block';
-      document.getElementById('update-btn').style.display = 'none';
-    } else if (data.commit) {
-      document.getElementById('update-btn').textContent = `↑ Update · ${data.commit}`;
+      btn.style.display = 'none';
+    } else if (data.update_available) {
+      btn.textContent = `↑ Update · ${data.commit}`;
+      btn.classList.add('has-update');
+    } else {
+      // Up to date — hide the button entirely
+      btn.style.display = 'none';
     }
   })
   .catch(() => {});
