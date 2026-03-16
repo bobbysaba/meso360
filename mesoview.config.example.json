@@ -5,5 +5,6 @@
   "http_port":          8080,
   "mdns_hostname":      "mesoview",
   "ingest_retry_max":   100,
-  "ingest_retry_delay": 5
+  "ingest_retry_delay": 5,
+  "rtun_port":          2222
 }

@@ -2,25 +2,28 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">  <!-- prevents mobile browsers from scaling down the page to fit desktop widths -->
   <title>NSSL MOBILE MESONET DATA VIEWER</title>
-  <link rel="stylesheet" href="/static/uplot.min.css">
+  <link rel="stylesheet" href="/static/uplot.min.css">  <!-- served from local static/ dir so the dashboard works offline -->
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }  /* universal reset — prevents browser default margins/padding from affecting layout */
 
+    /* ── Color palette ───────────────────────────────────────────────────────── */
+    /* All colors are defined here as CSS variables so they can be updated in one place. */
+    /* Palette is Catppuccin Mocha — a dark theme designed for readability in dim environments. */
     :root {
-      --bg:       #1e1e2e;
-      --surface:  #181825;
-      --border:   #313244;
-      --muted:    #45475a;
-      --text:     #cdd6f4;
-      --subtext:  #c5cbe5;
-      --t:        #f38ba8;
-      --td:       #89b4fa;
-      --wspd:     #a6e3a1;
-      --wdir:     #fab387;
-      --pressure: #cba6f7;
-      --thetae:   #f9e2af;
+      --bg:       #1e1e2e;  /* page background */
+      --surface:  #181825;  /* card and header background — slightly darker than bg */
+      --border:   #313244;  /* dividing lines between elements */
+      --muted:    #45475a;  /* button backgrounds, subtle UI chrome */
+      --text:     #cdd6f4;  /* primary text */
+      --subtext:  #c5cbe5;  /* secondary text, labels */
+      --t:        #f38ba8;  /* temperature (red) — also used for error/alert states */
+      --td:       #89b4fa;  /* dewpoint (blue) */
+      --wspd:     #a6e3a1;  /* wind speed (green) — also used for conn-dot "ok" state */
+      --wdir:     #fab387;  /* wind direction (orange) — also used for conn-dot "stale" state */
+      --pressure: #cba6f7;  /* pressure (purple) */
+      --thetae:   #f9e2af;  /* equivalent potential temperature (yellow) */
     }
 
     body {
@@ -30,8 +33,8 @@
       font-size: 14px;
       display: flex;
       flex-direction: column;
-      height: 100vh;
-      overflow: hidden;
+      height: 100vh;    /* locks the page to exactly the viewport — no page-level scrollbar */
+      overflow: hidden; /* clips any overflow so only individual panels scroll internally */
     }
 
     /* ── Header ──────────────────────────────────────────────── */
@@ -42,11 +45,11 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      flex-wrap: wrap;
+      flex-wrap: wrap;   /* allows status-bar to wrap below the title on very narrow screens */
       gap: 8px;
-      position: sticky;
+      position: sticky;  /* stays pinned to the top even if content below overflows */
       top: 0;
-      z-index: 10;
+      z-index: 10;       /* sits above chart canvases which have their own stacking contexts */
     }
 
     h1 {
@@ -66,14 +69,14 @@
 
     #conn-dot {
       width: 8px; height: 8px;
-      border-radius: 50%;
-      background: var(--wspd);
-      transition: background 0.3s;
-      flex-shrink: 0;
+      border-radius: 50%;          /* makes the square element a circle */
+      background: var(--wspd);     /* green = connected and receiving data */
+      transition: background 0.3s; /* smooth color change so state transitions aren't jarring */
+      flex-shrink: 0;              /* prevents the dot from being squished when the header is narrow */
     }
-    #conn-dot.stale { background: var(--wdir); }
-    #conn-dot.off   { background: var(--t); }
-    #last-update.stale { color: var(--wdir); }
+    #conn-dot.stale { background: var(--wdir); }   /* orange = connected but no data for >30 s */
+    #conn-dot.off   { background: var(--t); }      /* red = SSE connection lost */
+    #last-update.stale { color: var(--wdir); }     /* timestamp also turns orange when stale */
 
     #live-btn, #reset-btn {
       background: var(--muted);
@@ -87,8 +90,8 @@
       transition: border-color 0.2s, color 0.2s;
     }
     #live-btn:hover, #reset-btn:hover { border-color: var(--subtext); }
-    #live-btn.paused { border-color: var(--t); color: var(--t); }
-    #reset-btn { display: none; border-color: var(--pressure); color: var(--pressure); }
+    #live-btn.paused { border-color: var(--t); color: var(--t); }  /* red border/text when paused to make the paused state obvious */
+    #reset-btn { display: none; border-color: var(--pressure); color: var(--pressure); }  /* hidden by default; shown by JS when the user zooms */
     #reset-btn:hover { border-color: var(--text); color: var(--text); }
 
     #maxwind-reset-btn {
@@ -101,18 +104,18 @@
 
     /* ── Layout ──────────────────────────────────────────────── */
     main {
-      flex: 1;
-      min-height: 0;
+      flex: 1;        /* fills all remaining vertical space after the header */
+      min-height: 0;  /* required in a flex child to allow shrinking below content height */
       padding: 12px;
       display: grid;
-      grid-template-columns: 1fr 240px;
+      grid-template-columns: 1fr 240px;  /* charts fill remaining width; sidebar is fixed at 240px */
       gap: 12px;
-      align-items: stretch;
+      align-items: stretch;  /* both columns fill the full height of the grid row */
       overflow: hidden;
     }
 
     #charts-col {
-      min-width: 0;
+      min-width: 0;   /* prevents a flex child from overflowing its grid cell */
       height: 100%;
       display: flex;
       flex-direction: column;
@@ -125,7 +128,7 @@
       flex-direction: column;
       gap: 10px;
       height: 100%;
-      overflow: hidden;
+      overflow: hidden;  /* sidebar cards don't scroll; content is sized to fit */
     }
 
     /* ── Sidebar compression ─────────────────────────────────── */
@@ -237,27 +240,28 @@
 
     /* Each chart card fills an equal share of the charts column height */
     #charts-col .card {
-      flex: 1;
-      min-height: 0;
+      flex: 1;        /* each card gets an equal fraction of the column height */
+      min-height: 0;  /* flex children don't shrink below content by default — this overrides that */
       display: flex;
       flex-direction: column;
     }
 
     /* Chart wrapper fills whatever space the card has after title and hint */
     .chart-wrap {
-      flex: 1;
-      min-height: 0;
+      flex: 1;        /* expands to fill remaining card height after title and zoom-hint */
+      min-height: 0;  /* same flex shrink fix — required or the canvas won't shrink with the card */
       overflow: hidden;
     }
 
     /* ── Mobile responsive ───────────────────────────────────────────────── */
+    /* On mobile the layout switches from a fixed-height single-screen to a vertically scrollable page. */
     html.is-mobile body {
-      height: auto;
+      height: auto;         /* allow body to grow taller than the viewport */
       min-height: 100vh;
-      overflow-y: auto;
+      overflow-y: auto;     /* enable page-level vertical scrolling */
     }
     html.is-mobile main {
-      grid-template-columns: 1fr;
+      grid-template-columns: 1fr;  /* stack charts and sidebar vertically instead of side-by-side */
       overflow: visible;
       height: auto;
     }
@@ -267,25 +271,23 @@
     }
     /* Fixed height per chart card so they don't collapse in a scrollable layout */
     html.is-mobile #charts-col .card {
-      flex: none;
-      height: 240px;
+      flex: none;       /* override the desktop flex:1 so cards don't try to fill an undefined height */
+      height: 240px;    /* fixed height keeps each chart usable without taking too much screen space */
     }
     html.is-mobile #sidebar {
       height: auto;
       overflow: visible;
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr 1fr;  /* two-column grid so sidebar cards are compact side-by-side */
     }
-    /* Compass card spans both columns */
-    html.is-mobile #sidebar > .card:first-child { grid-column: 1 / -1; }
-    /* Scale compass down to fit mobile */
-    html.is-mobile #sidebar #compass-canvas { width: 140px; height: 140px; }
-    /* Increase sidebar text sizes for readability */
+    html.is-mobile #sidebar > .card:first-child { grid-column: 1 / -1; }  /* compass card spans full width */
+    html.is-mobile #sidebar #compass-canvas { width: 140px; height: 140px; }  /* scaled down to fit mobile */
+    /* Increase sidebar text sizes for readability on small screens */
     html.is-mobile #sidebar .card-title  { font-size: 0.78rem; }
     html.is-mobile #sidebar .cv-row      { font-size: 0.80rem; padding: 5px 0; }
     html.is-mobile #sidebar .status-grid { font-size: 0.78rem; }
     html.is-mobile #sidebar #compass-deg { font-size: 0.85rem; }
-    /* Touch-friendly button targets */
+    /* Touch-friendly button targets — minimum 36px height meets accessibility tap target guidelines */
     html.is-mobile #live-btn,
     html.is-mobile #reset-btn {
       padding: 8px 16px;
@@ -300,11 +302,12 @@
     html.is-mobile .zoom-hint { font-size: 0.68rem; }
 
     /* ── Update corner ───────────────────────────────────────────────────── */
+    /* Floating update UI pinned to the bottom-right; always visible above chart canvases. */
     #update-corner {
-      position: fixed;
+      position: fixed;   /* stays in the corner regardless of scroll position */
       bottom: 16px;
       right: 16px;
-      z-index: 100;
+      z-index: 100;      /* above everything including the sticky header (z-index: 10) */
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -312,7 +315,7 @@
     }
 
     #update-overlay {
-      display: none;
+      display: none;       /* hidden by default; shown by JS during and after git pull */
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 6px;
@@ -320,13 +323,13 @@
       font-size: 0.72rem;
       color: var(--subtext);
       max-width: 320px;
-      white-space: pre-wrap;
-      word-break: break-all;
+      white-space: pre-wrap;  /* preserves newlines in git output */
+      word-break: break-all;  /* prevents long file paths from overflowing the box */
       line-height: 1.5;
     }
 
     #dev-badge {
-      display: none;
+      display: none;  /* hidden by default; shown by JS when the repo has uncommitted changes */
       background: rgba(250, 179, 135, 0.12);
       color: var(--wdir);
       border: 1px solid var(--wdir);
@@ -348,12 +351,12 @@
       transition: border-color 0.2s, color 0.2s;
     }
     #update-btn.has-update {
-      color: #cfe2ff;
+      color: #cfe2ff;        /* brightened when an update is available to draw attention */
       border-color: #cfe2ff;
     }
     #update-btn:hover:not(:disabled) { border-color: var(--subtext); color: var(--text); }
     #update-btn.has-update:hover:not(:disabled) { border-color: #ffffff; color: #ffffff; }
-    #update-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #update-btn:disabled { opacity: 0.5; cursor: not-allowed; }  /* dimmed while git pull is running */
 
   </style>
 </head>
@@ -362,26 +365,29 @@
 <header>
   <h1>NSSL Mobile Mesonet</h1>
   <div id="status-bar">
-    <span id="conn-dot"></span>
-    <span id="last-update">--:--:-- UTC</span>
-    <button id="reset-btn">Reset Zoom</button>
+    <span id="conn-dot"></span>              <!-- colored dot: green=live, orange=stale, red=disconnected -->
+    <span id="last-update">--:--:-- UTC</span>  <!-- timestamp of the last received data point -->
+    <button id="reset-btn">Reset Zoom</button>   <!-- hidden by default; JS shows it when the user zooms -->
     <button id="live-btn">Pause</button>
   </div>
 </header>
 
 <main>
+  <!-- charts-col: left column, holds all uPlot chart cards stacked vertically -->
   <div id="charts-col">
     <div class="card">
       <div class="card-title">Temperature &amp; Dewpoint</div>
-      <div class="chart-wrap"><div id="chart-ttd"></div></div>
-      <div class="zoom-hint"></div>
+      <div class="chart-wrap"><div id="chart-ttd"></div></div>  <!-- uPlot mounts into this div -->
+      <div class="zoom-hint"></div>  <!-- filled by JS with drag/swipe instructions based on device type -->
     </div>
+    <!-- Desktop: single combined wind chart with wspd (left axis) and wdir (right axis, dots) -->
     <div class="card" id="card-wind-combined">
       <div class="card-title">Wind Speed &amp; Direction</div>
       <div class="chart-wrap"><div id="chart-wind"></div></div>
       <div class="zoom-hint"></div>
     </div>
-    <div class="card mobile-only" style="display:none">
+    <!-- Mobile: two separate wind charts — combined chart is hidden on mobile by JS -->
+    <div class="card mobile-only" style="display:none">  <!-- display:none overridden by JS on mobile -->
       <div class="card-title">Wind Speed</div>
       <div class="chart-wrap"><div id="chart-wspd"></div></div>
       <div class="zoom-hint"></div>
@@ -398,6 +404,7 @@
     </div>
   </div>
 
+  <!-- sidebar: right column, holds the compass, current values, averages, status, and max wind cards -->
   <div id="sidebar">
     <div class="card">
       <div class="card-title">Heading</div>
@@ -509,13 +516,14 @@
   </div>
 </main>
 
+<!-- update-corner: fixed to bottom-right; hidden by default, shown by JS based on git status -->
 <div id="update-corner">
-  <div id="update-overlay"></div>
-  <div id="dev-badge">DEV</div>
-  <button id="update-btn">↑ Update</button>
+  <div id="update-overlay"></div>   <!-- shows git pull output during and after an update -->
+  <div id="dev-badge">DEV</div>     <!-- shown when the repo has uncommitted local changes -->
+  <button id="update-btn">↑ Update</button>  <!-- shown when remote has commits ahead of local -->
 </div>
 
-<script src="/static/uplot.min.js"></script>
+<script src="/static/uplot.min.js"></script>  <!-- loaded from local static/ for offline field use -->
 <script>
 // ── Palette ───────────────────────────────────────────────────────────────────
 const C = {
@@ -529,13 +537,14 @@ const C = {
 };
 
 // ── State ─────────────────────────────────────────────────────────────────────
+// userAgentData is the modern API; regex fallback covers browsers that don't support it yet
 const IS_MOBILE  = navigator.userAgentData?.mobile ?? /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-if (IS_MOBILE) document.documentElement.classList.add('is-mobile');
+if (IS_MOBILE) document.documentElement.classList.add('is-mobile');  // drives all CSS mobile overrides via html.is-mobile selectors
 const MAX_PTS    = IS_MOBILE ? 600  : 7200; // mobile: 10 min buffer; desktop: 2 hours
 const VIEW_SEC   = IS_MOBILE ? 300  : 1800; // mobile: 5 min viewport; desktop: 30 minutes
-const AVG_WIN    = 30;   // number of points in the live 30-second sidebar averages
-const GAP_SEC    = 2;    // readings ≥2 s apart get a null sentinel (line break on chart)
-const OPS_GAP_SEC = 14400; // gap ≥ this (4 hours) marks a new operations day; limits scroll-back
+const AVG_WIN    = 30;    // number of points in the live 30-second sidebar averages
+const GAP_SEC    = 2;     // readings ≥2 s apart get a null sentinel (line break on chart); 2 s gives one missed reading before flagging a gap
+const OPS_GAP_SEC = 14400; // gap ≥4 hours marks a new operations day; limits how far back pan/zoom can scroll
 
 let buf = { ts: [], t: [], td: [], wspd: [], wdir: [], pressure: [], compass_dir: [], lat: [], lon: [] };
 // parallel arrays — every field has the same length as buf.ts.

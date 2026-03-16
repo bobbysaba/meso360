@@ -2,31 +2,33 @@
 """
 Simple process supervisor for Mesoview.
 
-Starts two commands, restarts them if they exit, and forwards signals for
-clean shutdown. Designed to be OS-agnostic (Windows/macOS/Linux).
+Starts ingest, viewer, and SSH reverse tunnel processes, restarts them if
+they exit, and forwards signals for clean shutdown. Designed to be
+OS-agnostic (Windows/macOS/Linux).
 
-All output from both child processes is written to a daily log file:
+All output from child processes is written to a daily log file:
   <log_dir>/mesoview.YYYYMMDD.log
 
-The log file rolls over at midnight; both children are restarted so they
+The log file rolls over at midnight; all children are restarted so they
 inherit the new file handle.
 
 Defaults:
-- ingest:  python ingest_mm.py
+- ingest:  python ingest.py
 - viewer:  python viewer.py
+- tunnel:  ssh reverse tunnel to clamps@remote.bliss.science (port from config)
 
-You can override commands with environment variables:
+You can override ingest/viewer commands with environment variables:
 - MESO_INGEST_CMD
 - MESO_VIEWER_CMD
 Each should be a full command line string.
 """
 
-from __future__ import annotations
+from __future__ import annotations  # allows type hints like tuple[str, str] on Python < 3.10
 
 import json
 import os
-import shlex
-import signal
+import shlex      # safe command-line tokenization and quoting, used to split/escape shell commands
+import signal     # used to catch SIGINT (Ctrl-C) and SIGTERM so we can shut down children cleanly
 import subprocess
 import sys
 import time
@@ -34,17 +36,18 @@ from datetime import date
 from pathlib import Path
 from typing import List, Optional
 
-RESTART_DELAY_SEC = 2
+RESTART_DELAY_SEC = 2  # seconds to wait between terminate() and kill() during restarts
 
 
 def _load_config() -> dict:
     cfg_path = Path(__file__).parent / 'mesoview.config.json'
     if not cfg_path.exists():
-        return {}
+        return {}  # no config file is fine; all settings fall back to defaults
     try:
         with open(cfg_path) as f:
-            return json.load(f) or {}
+            return json.load(f) or {}  # 'or {}' guards against an empty/null JSON file
     except Exception as e:
+        # datetime is imported locally here because the module-level _log helper isn't defined yet
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         print(f'[{ts}] [supervisor] Warning: could not read config {cfg_path}: {e}', flush=True)
@@ -56,57 +59,87 @@ def _open_log(log_dir: Path) -> tuple[object, date]:
     log_dir.mkdir(parents=True, exist_ok=True)
     today = date.today()
     log_path = log_dir / f'mesoview.{today.strftime("%Y%m%d")}.log'
-    fh = open(log_path, 'a', buffering=1)  # line-buffered
-    return fh, today
+    fh = open(log_path, 'a', buffering=1)  # buffering=1 = line-buffered: each line is flushed immediately
+    return fh, today  # return today's date so the main loop can detect when midnight rolls over
 
 
 def _log(fh, msg: str) -> None:
+    # datetime imported locally to avoid a module-level import that would shadow the one in _load_config
     from datetime import datetime, timezone
     ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     print(f'[{ts}] [supervisor] {msg}', file=fh, flush=True)
 
 
 def _split_cmd(cmd: str) -> List[str]:
+    # on Windows, subprocess needs the raw command string with shell=True to resolve PATH and extensions
+    # on Unix, shlex.split tokenizes safely (handles spaces in paths, quoted args, etc.)
     if os.name == 'nt':
         return [cmd]
     return shlex.split(cmd)
 
 
 def _default_cmds() -> tuple[str, str]:
-    py = shlex.quote(sys.executable)
-    ingest = os.environ.get('MESO_INGEST_CMD') or f'{py} ingest_mm.py'
+    py = shlex.quote(sys.executable)  # quote the Python path in case it contains spaces
+    # allow the caller to override commands via environment variables (useful for testing or venvs)
+    ingest = os.environ.get('MESO_INGEST_CMD') or f'{py} ingest.py'
     viewer  = os.environ.get('MESO_VIEWER_CMD') or f'{py} viewer.py'
     return ingest, viewer
 
 
+def _build_rtun_cmd(port: int) -> str:
+    """Build the SSH reverse tunnel command for the given port.
+
+    Uses ~/.ssh/clamps_rsa and connects to clamps@remote.bliss.science.
+    The key path is resolved via pathlib so it works on Windows, macOS,
+    and Linux without modification.
+    """
+    key = Path.home() / '.ssh' / 'clamps_rsa'
+    # Windows paths may contain spaces, so wrap in quotes; Unix uses shlex.quote for safety
+    key_str = f'"{key}"' if os.name == 'nt' else shlex.quote(str(key))
+    return (
+        f'ssh -q -N '                        # -q = quiet (suppress banners), -N = no remote command (tunnel only)
+        f'-L {port}:localhost:22 '           # forward local port → remote machine (allows inbound SSH to this host)
+        f'-R {port}:localhost:22 '           # forward remote port → this machine (allows remote to reach us)
+        f'-o TCPKeepAlive=yes '              # send TCP keepalives so the connection isn't dropped by firewalls/NAT
+        f'-o ServerAliveCountMax=3 '         # disconnect after 3 missed keepalive responses
+        f'-o ServerAliveInterval=10 '        # send a keepalive every 10 seconds
+        f'-i {key_str} '                     # use the NSSL/BLISS RSA key for authentication
+        f'clamps@remote.bliss.science'       # remote server that acts as the tunnel endpoint
+    )
+
+
 class Child:
     def __init__(self, name: str, cmd: str):
-        self.name = name
-        self.cmd  = cmd
-        self.proc: Optional[subprocess.Popen] = None
+        self.name = name                          # human-readable label used in log messages
+        self.cmd  = cmd                           # full shell command string for this process
+        self.proc: Optional[subprocess.Popen] = None  # set when the process is running; None otherwise
 
     def start(self, log_fh) -> None:
+        # Windows requires shell=True to resolve executables via PATH; Unix passes a pre-split arg list
         if os.name == 'nt':
             self.proc = subprocess.Popen(
                 self.cmd, shell=True, stdout=log_fh, stderr=log_fh,
             )
         else:
             self.proc = subprocess.Popen(
-                _split_cmd(self.cmd), stdout=log_fh, stderr=log_fh,
+                _split_cmd(self.cmd), stdout=log_fh, stderr=log_fh,  # stdout+stderr both go to the shared log file
             )
 
     def poll(self) -> Optional[int]:
+        # returns the exit code if the process has ended, or None if it's still running
         return self.proc.poll() if self.proc else None
 
     def terminate(self) -> None:
+        # sends SIGTERM (Unix) or TerminateProcess (Windows); gives the process a chance to clean up
         if self.proc:
             try: self.proc.terminate()
-            except Exception: pass
+            except Exception: pass  # ignore errors if the process already exited
 
     def kill(self) -> None:
+        # sends SIGKILL (Unix) or forcefully terminates (Windows); used as a fallback after terminate()
         if self.proc:
             try: self.proc.kill()
-            except Exception: pass
+            except Exception: pass  # ignore errors if the process already exited
 
 
 def main() -> int:
@@ -118,67 +151,88 @@ def main() -> int:
     _log(log_fh, f'starting — log: {log_fh.name}')
 
     ingest_cmd, viewer_cmd = _default_cmds()
-    ingest = Child('ingest', ingest_cmd)
-    viewer = Child('viewer', viewer_cmd)
+    children: List[Child] = [
+        Child('ingest', ingest_cmd),
+        Child('viewer', viewer_cmd),
+    ]
 
-    stop = False
+    # validate rtun_port before using it — a bad value in config should disable the tunnel, not crash the supervisor
+    rtun_port = cfg.get('rtun_port')
+    if rtun_port is not None:
+        try:
+            rtun_port = int(rtun_port)
+        except (ValueError, TypeError):
+            _log(log_fh, f'WARNING: rtun_port "{rtun_port}" is not a valid integer — SSH tunnel disabled')
+            rtun_port = None
+    if rtun_port:
+        key = Path.home() / '.ssh' / 'clamps_rsa'
+        if not key.exists():
+            # warn early so the user knows why the tunnel won't connect — it will still attempt to start
+            _log(log_fh, f'WARNING: SSH key not found at {key} — tunnel will likely fail')
+        children.append(Child('tunnel', _build_rtun_cmd(rtun_port)))
+    else:
+        _log(log_fh, 'rtun_port not set in config — SSH tunnel disabled')
+
+    stop = False  # set to True by the signal handler to break the main loop
 
     def _handle_signal(signum, _frame):
-        nonlocal stop
+        nonlocal stop  # nonlocal lets the nested function write to the enclosing scope's 'stop' variable
         _log(log_fh, f'received signal {signum}, shutting down')
-        stop = True
+        stop = True  # main loop will exit on the next iteration
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
-            signal.signal(sig, _handle_signal)
+            signal.signal(sig, _handle_signal)  # register handler for Ctrl-C and systemd/kill signals
         except Exception:
-            pass
+            pass  # signal.signal can raise on some platforms (e.g. Windows doesn't support all signals)
 
-    _log(log_fh, f'starting ingest: {ingest_cmd}')
-    ingest.start(log_fh)
-    _log(log_fh, f'starting viewer: {viewer_cmd}')
-    viewer.start(log_fh)
+    for child in children:
+        _log(log_fh, f'starting {child.name}: {child.cmd}')
+        child.start(log_fh)
 
     try:
         while not stop:
             # ── Midnight log rotation ─────────────────────────────────────────
             today = date.today()
             if today != log_date:
+                # date has changed — close the old log file and open a new one for today
                 _log(log_fh, f'date rolled over to {today} — rotating log and restarting children')
                 log_fh.close()
                 log_fh, log_date = _open_log(log_dir)
                 _log(log_fh, f'new log: {log_fh.name}')
-                for child in (ingest, viewer):
-                    child.terminate()
-                time.sleep(RESTART_DELAY_SEC)
-                for child in (ingest, viewer):
-                    child.kill()
-                _log(log_fh, f'starting ingest: {ingest_cmd}')
-                ingest.start(log_fh)
-                _log(log_fh, f'starting viewer: {viewer_cmd}')
-                viewer.start(log_fh)
+                for child in children:
+                    child.terminate()         # ask each child to exit gracefully
+                time.sleep(RESTART_DELAY_SEC) # give them a moment to flush and exit
+                for child in children:
+                    child.kill()              # force-kill any that didn't respond to terminate()
+                for child in children:
+                    # restart each child with the new log file handle so output goes to today's log
+                    _log(log_fh, f'starting {child.name}: {child.cmd}')
+                    child.start(log_fh)
 
             # ── Crash restart ─────────────────────────────────────────────────
-            for child in (ingest, viewer):
-                rc = child.poll()
+            for child in children:
+                rc = child.poll()     # None = still running; any integer = process has exited
                 if rc is not None:
+                    # child exited unexpectedly — log the exit code and restart it
                     _log(log_fh, f'{child.name} exited with {rc}; restarting in {RESTART_DELAY_SEC}s')
                     time.sleep(RESTART_DELAY_SEC)
                     child.start(log_fh)
 
-            time.sleep(1)
+            time.sleep(1)  # poll children once per second; low CPU overhead
 
     finally:
+        # reached on clean shutdown (stop=True) or unhandled exception
         _log(log_fh, 'shutting down children')
-        for child in (ingest, viewer):
-            child.terminate()
-        time.sleep(1)
-        for child in (ingest, viewer):
-            child.kill()
+        for child in children:
+            child.terminate()   # polite shutdown first
+        time.sleep(1)           # brief grace period for children to exit
+        for child in children:
+            child.kill()        # force-kill anything still running
         log_fh.close()
 
     return 0
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    raise SystemExit(main())  # propagates the return code to the shell (0 = success)

@@ -8,6 +8,8 @@ Real-time web dashboard for NSSL Mobile Mesonet data. Fetches observations from 
 
 - Python 3.10 or later
 - [Miniforge](https://github.com/conda-forge/miniforge/releases) (recommended) **or** any Python installation with pip
+- OpenSSH client — built into macOS, Linux, and Windows 10/11 (no WSL required)
+- `~/.ssh/clamps_rsa` — the NSSL/BLISS RSA key must be present on each vehicle machine before the SSH tunnel will connect
 
 ---
 
@@ -69,7 +71,8 @@ cp mesoview.config.example.json mesoview.config.json
   "http_port":          8080,
   "mdns_hostname":      "mesoview",
   "ingest_retry_max":   100,
-  "ingest_retry_delay": 5
+  "ingest_retry_delay": 5,
+  "rtun_port":          2222
 }
 ```
 
@@ -82,12 +85,15 @@ cp mesoview.config.example.json mesoview.config.json
 | `mdns_hostname` | mDNS hostname for the viewer (if your network supports it) | `mesoview` |
 | `ingest_retry_max` | Max fetch attempts before the ingest script exits | `100` |
 | `ingest_retry_delay` | Seconds between retry attempts | `5` |
+| `rtun_port` | Port for the SSH reverse tunnel to `remote.bliss.science` — **unique per vehicle** to avoid conflicts | *(required)* |
+
+> **SSH tunnel** — `supervisor.py` automatically maintains a reverse SSH tunnel to `clamps@remote.bliss.science` using `~/.ssh/clamps_rsa`. Each vehicle must use a unique `rtun_port`. The tunnel is managed cross-platform (Windows/macOS/Linux) via the system `ssh` client; no WSL or additional tooling is required. If the tunnel drops, the supervisor restarts it automatically.
 
 ---
 
 ## 4 — Run manually
 
-`supervisor.py` starts both the ingest script and the viewer together, and automatically restarts either one if it crashes.
+`supervisor.py` starts the ingest script, the viewer, and the SSH reverse tunnel together, and automatically restarts any of them if they crash.
 
 ```bash
 # Make sure your environment is active first
@@ -101,6 +107,18 @@ Open a browser on any device connected to the same network and go to:
 ```
 http://<host-machine-ip>:8080
 ```
+
+### Status indicator
+
+The colored dot in the top-left of the dashboard shows the current data feed health:
+
+| Color | Meaning |
+|-------|---------|
+| Green | Connected and receiving data normally |
+| Orange | Connected but no data received in the last 30 seconds — ingest may be down, the datalogger may be unreachable, or the rack may not be powered on |
+| Red | SSE connection to the viewer server lost — the viewer process may be down or the network between your browser and the host machine is interrupted |
+
+If the dot is orange, check the log file for `WARNING` messages from ingest.
 
 All output from both scripts is written to `~/mesoview_logs/mesoview.YYYYMMDD.log` (configurable via `log_dir`). To watch it live:
 
@@ -242,8 +260,8 @@ No other steps needed — the config file is not touched by git updates.
 
 ```
 mesoview/
-├── supervisor.py          # start here — runs ingest + viewer, auto-restarts both
-├── ingest_mm.py           # fetches data from the datalogger at 1 Hz
+├── supervisor.py          # start here — runs ingest, viewer, and SSH tunnel; auto-restarts all
+├── ingest.py              # fetches data from the datalogger at 1 Hz
 ├── viewer.py              # Flask SSE server + web dashboard
 ├── mesoview.config.example.json   # copy to mesoview.config.json and edit
 ├── environment.yml        # conda environment spec
