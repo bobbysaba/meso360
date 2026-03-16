@@ -20,7 +20,7 @@ def _log(msg):
     print(f'[{ts}] [mesoingest] {msg}', flush=True)  # flush=True ensures output appears immediately in the supervisor log
 
 def _load_config():
-    cfg_path = Path(__file__).parent / 'mesoview.config.json'
+    cfg_path = Path(__file__).parent / 'meso360.config.json'
     if not cfg_path.exists():
         return {}  # no config file is fine; all settings fall back to hardcoded defaults below
     try:

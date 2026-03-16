@@ -1,6 +1,6 @@
 .claude/
 .DS_Store
-mesoview.config.json
+meso360.config.json
 .venv/
 __pycache__/
 *.pyc

@@ -150,7 +150,7 @@ Conda creates an isolated environment that won't conflict with other Python inst
 
 ```bash
 conda env create -f environment.yml
-conda activate mesoview
+conda activate meso360
 ```
 
 To update the environment after a `git pull` that adds new dependencies:
@@ -182,10 +182,10 @@ pip install -r requirements.txt
 Copy the example config and edit it for this vehicle:
 
 ```bash
-cp mesoview.config.example.json mesoview.config.json
+cp meso360.config.example.json meso360.config.json
 ```
 
-`mesoview.config.json` is listed in `.gitignore` and will never be overwritten by a `git pull`. Open it in any text editor and set the values for this vehicle. See [Section 4 — Configuration Reference](#4-configuration-reference) for a full description of every key.
+`meso360.config.json` is listed in `.gitignore` and will never be overwritten by a `git pull`. Open it in any text editor and set the values for this vehicle. See [Section 4 — Configuration Reference](#4-configuration-reference) for a full description of every key.
 
 **Minimum required changes:**
 
@@ -218,7 +218,7 @@ Copy-Item C:\path\to\clamps_rsa $HOME\.ssh\clamps_rsa
 
 ## 4. Configuration Reference
 
-All settings live in `mesoview.config.json`. Every key is optional; the system falls back to the default shown below if a key is missing.
+All settings live in `meso360.config.json`. Every key is optional; the system falls back to the default shown below if a key is missing.
 
 ```json
 {
@@ -255,7 +255,7 @@ All settings live in `mesoview.config.json`. Every key is optional; the system f
 Activate your environment, then run the supervisor from the repo directory:
 
 ```bash
-conda activate mesoview       # or: source .venv/bin/activate
+conda activate meso360       # or: source .venv/bin/activate
 cd /path/to/meso360
 python supervisor.py
 ```
@@ -282,7 +282,7 @@ Before launching any child processes, `supervisor.py` runs a set of startup chec
 
 ```
 [2025-06-05 17:52:28] [supervisor] === Preflight checks ===
-[2025-06-05 17:52:28] [supervisor]   PASS  config file found: /path/to/meso360/mesoview.config.json
+[2025-06-05 17:52:28] [supervisor]   PASS  config file found: /path/to/meso360/meso360.config.json
 [2025-06-05 17:52:28] [supervisor]   PASS  data directory writable: /home/user/data/raw/mesonet
 [2025-06-05 17:52:28] [supervisor]   PASS  SSH key found: /home/user/.ssh/clamps_rsa
 [2025-06-05 17:52:29] [supervisor]   PASS  software up to date (a1b2c3d)
@@ -300,13 +300,13 @@ The fourth check (`software up to date`) runs `git fetch` and pulls any new comm
 #### Config file not found
 
 ```
-WARN  config file not found: .../mesoview.config.json
-      Run: cp mesoview.config.example.json mesoview.config.json
+WARN  config file not found: .../meso360.config.json
+      Run: cp meso360.config.example.json meso360.config.json
 ```
 
 **What it means:** The system is running on default values. The datalogger IP and SSH tunnel port are almost certainly wrong.
 
-**Fix:** Run the `cp` command shown, then edit `mesoview.config.json` with the correct values for this vehicle. Restart supervisor.
+**Fix:** Run the `cp` command shown, then edit `meso360.config.json` with the correct values for this vehicle. Restart supervisor.
 
 ---
 
@@ -314,7 +314,7 @@ WARN  config file not found: .../mesoview.config.json
 
 ```
 WARN  data directory not writable: /path/to/data/dir (Permission denied)
-      Fix permissions or set "data_dir" in mesoview.config.json
+      Fix permissions or set "data_dir" in meso360.config.json
 ```
 
 **What it means:** mesoingest will fail to write data files. No data will be collected until this is resolved.
@@ -326,7 +326,7 @@ WARN  data directory not writable: /path/to/data/dir (Permission denied)
 chmod 755 /path/to/data/dir
 
 # Option 2 — point to a directory the current user owns
-# Edit mesoview.config.json:  "data_dir": "~/data/raw/mesonet"
+# Edit meso360.config.json:  "data_dir": "~/data/raw/mesonet"
 ```
 
 Restart supervisor after fixing.
@@ -599,9 +599,9 @@ To have `supervisor.py` launch automatically at boot, first find the full path t
 
 ```bash
 # conda
-conda activate mesoview
-which python          # macOS / Linux  → e.g. /Users/you/miniforge3/envs/mesoview/bin/python
-where python          # Windows        → e.g. C:\Users\you\miniforge3\envs\mesoview\python.exe
+conda activate meso360
+which python          # macOS / Linux  → e.g. /Users/you/miniforge3/envs/meso360/bin/python
+where python          # Windows        → e.g. C:\Users\you\miniforge3\envs\meso360\python.exe
 
 # venv
 # macOS / Linux: /path/to/meso360/.venv/bin/python
@@ -623,7 +623,7 @@ Create `~/Library/LaunchAgents/com.mesoview.plist`:
   <key>Label</key>             <string>com.mesoview</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/YOUR_USER/miniforge3/envs/mesoview/bin/python</string>
+    <string>/Users/YOUR_USER/miniforge3/envs/meso360/bin/python</string>
     <string>/path/to/meso360/supervisor.py</string>
   </array>
   <key>WorkingDirectory</key>  <string>/path/to/meso360</string>
@@ -664,7 +664,7 @@ After=network.target
 
 [Service]
 WorkingDirectory=/path/to/meso360
-ExecStart=/path/to/conda/envs/mesoview/bin/python supervisor.py
+ExecStart=/path/to/conda/envs/meso360/bin/python supervisor.py
 Restart=on-failure
 RestartSec=5
 
@@ -701,7 +701,7 @@ crontab -e
 Add this line (replace paths):
 
 ```
-@reboot cd /path/to/meso360 && /path/to/conda/envs/mesoview/bin/python supervisor.py >> ~/mesoview_logs/cron_boot.log 2>&1
+@reboot cd /path/to/meso360 && /path/to/conda/envs/meso360/bin/python supervisor.py >> ~/mesoview_logs/cron_boot.log 2>&1
 ```
 
 > **Note:** cron does not restart the process if it crashes. If crash recovery is important, prefer systemd.
@@ -714,7 +714,7 @@ Add this line (replace paths):
 2. **General** tab: give it a name (e.g. `Mesoview`); check *Run whether user is logged on or not*
 3. **Triggers** tab: New → *At startup*
 4. **Actions** tab: New →
-   - **Program/script**: full path to your env's Python executable, e.g. `C:\Users\YOU\miniforge3\envs\mesoview\python.exe`
+   - **Program/script**: full path to your env's Python executable, e.g. `C:\Users\YOU\miniforge3\envs\meso360\python.exe`
    - **Add arguments**: `supervisor.py`
    - **Start in**: full path to the repo directory, e.g. `C:\path\to\meso360`
 5. **Settings** tab: check *If the task fails, restart every 1 minute*
@@ -765,7 +765,7 @@ launchctl unload ~/Library/LaunchAgents/com.mesoview.plist
 launchctl load   ~/Library/LaunchAgents/com.mesoview.plist
 ```
 
-The config file (`mesoview.config.json`) is never modified by a git update.
+The config file (`meso360.config.json`) is never modified by a git update.
 
 ---
 
@@ -828,8 +828,8 @@ meso360/
 ├── supervisor.py                   # Entry point — starts and monitors all three components
 ├── mesoingest.py                   # Fetches observations from the Campbell datalogger at 1 Hz
 ├── mesoview.py                     # Flask web server; streams live data and serves the dashboard
-├── mesoview.config.json            # Local config — git-ignored, never overwritten by git pull
-├── mesoview.config.example.json    # Template config — copy this to mesoview.config.json
+├── meso360.config.json            # Local config — git-ignored, never overwritten by git pull
+├── meso360.config.example.json    # Template config — copy this to meso360.config.json
 ├── environment.yml                 # conda environment spec (Python + dependencies)
 ├── requirements.txt                # pip fallback dependency list
 ├── templates/
@@ -871,14 +871,14 @@ meso360/
 
 **Host machine**
 
-- [ ] `mesoview.config.json` exists in the meso360 directory
+- [ ] `meso360.config.json` exists in the meso360 directory
 - [ ] `logger_ip` in config matches the datalogger's LAN IP for this vehicle
 - [ ] `rtun_port` in config is set to this vehicle's unique assigned port
 - [ ] `~/.ssh/clamps_rsa` is present (`ls ~/.ssh/clamps_rsa` — should not say "No such file")
 
 **Starting the system**
 
-- [ ] Conda environment activated: `conda activate mesoview`
+- [ ] Conda environment activated: `conda activate meso360`
 - [ ] Supervisor started: `python supervisor.py` (or verified running via launchd/systemd)
 - [ ] Log shows all preflight checks as `PASS` — no `WARN` lines
 - [ ] Dashboard opens in browser at `http://<host-ip>:8080`

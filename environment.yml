@@ -1,4 +1,4 @@
-name: mesoview
+name: meso360
 channels:
   - conda-forge
   - defaults

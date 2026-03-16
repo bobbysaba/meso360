@@ -41,7 +41,7 @@ UPDATE_EXIT_CODE  = 42  # mesoview exits with this code after a successful git p
 
 
 def _load_config() -> dict:
-    cfg_path = Path(__file__).parent / 'mesoview.config.json'
+    cfg_path = Path(__file__).parent / 'meso360.config.json'
     if not cfg_path.exists():
         return {}  # no config file is fine; all settings fall back to defaults
     try:
@@ -114,12 +114,12 @@ def _preflight(log_fh, cfg: dict) -> None:
     _log(log_fh, '=== Preflight checks ===')
 
     # Check 1 — Config file present next to this script
-    cfg_path = Path(__file__).parent / 'mesoview.config.json'
+    cfg_path = Path(__file__).parent / 'meso360.config.json'
     if cfg_path.exists():
         _log(log_fh, f'  PASS  config file found: {cfg_path}')
     else:
         _log(log_fh, f'  WARN  config file not found: {cfg_path}')
-        _log(log_fh, '       Run: cp mesoview.config.example.json mesoview.config.json')
+        _log(log_fh, '       Run: cp meso360.config.example.json meso360.config.json')
 
     # Check 2 — Data directory is reachable and writable
     default_data_dir = Path.home() / 'data' / 'raw' / 'mesonet'
@@ -132,7 +132,7 @@ def _preflight(log_fh, cfg: dict) -> None:
         _log(log_fh, f'  PASS  data directory writable: {data_dir}')
     except Exception as e:
         _log(log_fh, f'  WARN  data directory not writable: {data_dir} ({e})')
-        _log(log_fh, f'       Fix permissions or set "data_dir" in mesoview.config.json')
+        _log(log_fh, f'       Fix permissions or set "data_dir" in meso360.config.json')
 
     # Check 3 — SSH key (only relevant when a reverse tunnel is configured)
     if cfg.get('rtun_port') is not None:

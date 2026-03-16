@@ -93,7 +93,7 @@ def _log(msg):
     print(f'[{ts}] [mesoview] {msg}', flush=True)  # flush=True ensures lines appear immediately in the supervisor log
 
 def _load_config():
-    cfg_path = Path(__file__).parent / 'mesoview.config.json'
+    cfg_path = Path(__file__).parent / 'meso360.config.json'
     if not cfg_path.exists():
         return {}  # missing config is fine; all values fall back to defaults below
     try:

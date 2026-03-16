@@ -132,12 +132,17 @@
     }
 
     /* ── Sidebar compression ─────────────────────────────────── */
-    #sidebar .card { padding: 8px 10px 6px; }
-    #sidebar .card-title { font-size: 0.64rem; margin-bottom: 5px; }
-    #sidebar .cv-row { padding: 3px 0; font-size: 0.72rem; }
-    #sidebar .status-grid { gap: 6px; font-size: 0.72rem; }
-    #sidebar #compass-canvas { width: 180px; height: 180px; }
-    #sidebar #compass-deg { font-size: 0.74rem; }
+    /* Key dimensions scale with viewport height via clamp(min, Xvh, max) so the sidebar fits     */
+    /* on any screen without scrolling. The compass canvas is the biggest consumer and scales most. */
+    #sidebar { gap: clamp(4px, 0.7vh, 10px); }
+    #sidebar .card { padding: clamp(4px, 0.8vh, 8px) 10px clamp(3px, 0.5vh, 6px); }
+    #sidebar .card-title { font-size: clamp(0.56rem, 1.1vh, 0.64rem); margin-bottom: clamp(2px, 0.4vh, 5px); }
+    #sidebar .cv-row { padding: clamp(1px, 0.25vh, 3px) 0; font-size: clamp(0.60rem, 1.2vh, 0.72rem); }
+    #sidebar .status-grid { gap: clamp(3px, 0.5vh, 6px); font-size: clamp(0.60rem, 1.2vh, 0.72rem); }
+    #sidebar #compass-canvas { width: clamp(100px, 14vh, 180px); height: clamp(100px, 14vh, 180px); }
+    #sidebar #compass-wrap { gap: clamp(3px, 0.5vh, 6px); }
+    #sidebar #compass-labels { font-size: clamp(0.68rem, 1.3vh, 0.85rem); gap: clamp(6px, 1.2vh, 12px); }
+    #sidebar #compass-deg { font-size: clamp(0.62rem, 1.2vh, 0.74rem); }
     #sidebar .cv-label { white-space: nowrap; }
     #sidebar .cv-val { white-space: nowrap; }
 
@@ -286,6 +291,7 @@
       overflow: visible;
       display: grid;
       grid-template-columns: 1fr 1fr;  /* two-column grid so sidebar cards are compact side-by-side */
+      gap: 10px;  /* restore fixed gap — mobile uses a scrollable layout so vh-based scaling isn't needed */
     }
     html.is-mobile #sidebar > .card:first-child { grid-column: 1 / -1; }  /* compass card spans full width */
     html.is-mobile #sidebar #compass-canvas { width: 140px; height: 140px; }  /* scaled down to fit mobile */

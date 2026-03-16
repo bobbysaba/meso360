@@ -52,7 +52,7 @@ cd meso360
 
 ```bash
 conda env create -f environment.yml
-conda activate mesoview
+conda activate meso360
 ```
 
 To update later after a `git pull`:
@@ -82,10 +82,10 @@ pip install -r requirements.txt
 Copy the example config and edit it:
 
 ```bash
-cp mesoview.config.example.json mesoview.config.json
+cp meso360.config.example.json meso360.config.json
 ```
 
-`mesoview.config.json` is git-ignored so your local settings won't be overwritten by `git pull`.
+`meso360.config.json` is git-ignored so your local settings won't be overwritten by `git pull`.
 
 ```json
 {
@@ -117,7 +117,7 @@ cp mesoview.config.example.json mesoview.config.json
 
 ```bash
 # Make sure your environment is active first
-conda activate mesoview   # or: source .venv/bin/activate
+conda activate meso360   # or: source .venv/bin/activate
 
 python supervisor.py
 ```
@@ -126,7 +126,7 @@ On startup, supervisor runs a set of preflight checks before launching any child
 
 ```
 [supervisor] === Preflight checks ===
-[supervisor]   PASS  config file found: .../mesoview.config.json
+[supervisor]   PASS  config file found: .../meso360.config.json
 [supervisor]   PASS  data directory writable: ~/data/raw/mesonet
 [supervisor]   PASS  SSH key found: ~/.ssh/clamps_rsa
 [supervisor]   PASS  software up to date (a1b2c3d)
@@ -202,7 +202,7 @@ The goal is to have `supervisor.py` launch automatically when the host machine b
 
 ```bash
 # conda
-conda activate mesoview
+conda activate meso360
 which python          # macOS / Linux
 where python          # Windows — copy the full path shown
 
@@ -226,7 +226,7 @@ Create `~/Library/LaunchAgents/com.mesoview.plist`:
   <key>Label</key>             <string>com.mesoview</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/YOUR_USER/miniforge3/envs/mesoview/bin/python</string>
+    <string>/Users/YOUR_USER/miniforge3/envs/meso360/bin/python</string>
     <string>/path/to/meso360/supervisor.py</string>
   </array>
   <key>WorkingDirectory</key>  <string>/path/to/meso360</string>
@@ -261,7 +261,7 @@ After=network.target
 
 [Service]
 WorkingDirectory=/path/to/meso360
-ExecStart=/path/to/conda/envs/mesoview/bin/python supervisor.py
+ExecStart=/path/to/conda/envs/meso360/bin/python supervisor.py
 Restart=on-failure
 RestartSec=5
 
@@ -286,7 +286,7 @@ crontab -e
 Add this line (replace paths):
 
 ```
-@reboot cd /path/to/meso360 && /path/to/conda/envs/mesoview/bin/python supervisor.py
+@reboot cd /path/to/meso360 && /path/to/conda/envs/meso360/bin/python supervisor.py
 ```
 
 ---
@@ -321,7 +321,7 @@ To test without rebooting: right-click the task → **Run**.
 conda env update -f environment.yml --prune
 ```
 
-The config file (`mesoview.config.json`) is never modified by a git update.
+The config file (`meso360.config.json`) is never modified by a git update.
 
 ---
 
@@ -332,7 +332,7 @@ meso360/
 ├── supervisor.py          # start here — runs mesoingest, mesoview, and mesosync; auto-restarts all
 ├── mesoingest.py          # fetches data from the datalogger at 1 Hz; writes daily .txt files
 ├── mesoview.py            # Flask SSE server + web dashboard
-├── mesoview.config.example.json   # copy to mesoview.config.json and edit
+├── meso360.config.example.json   # copy to meso360.config.json and edit
 ├── environment.yml        # conda environment spec
 ├── requirements.txt       # pip fallback
 ├── templates/
