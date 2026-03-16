@@ -17,7 +17,7 @@ import json
 def _log(msg):
     # prefix every log line with a UTC timestamp so log entries are unambiguous across time zones
     ts = dt.datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-    print(f'[{ts}] [ingest] {msg}', flush=True)  # flush=True ensures output appears immediately in the supervisor log
+    print(f'[{ts}] [mesoingest] {msg}', flush=True)  # flush=True ensures output appears immediately in the supervisor log
 
 def _load_config():
     cfg_path = Path(__file__).parent / 'mesoview.config.json'
@@ -40,7 +40,7 @@ MAX_TRIES    = int(_CFG.get('ingest_retry_max',   100))  # how many consecutive 
 RETRY_DELAY  = int(_CFG.get('ingest_retry_delay',   5))  # seconds to wait between retry attempts
 
 # column names written as the first line of each daily data file
-# must stay in sync with HEADER in viewer.py — both derive IDX from this string
+# must stay in sync with HEADER in mesoview.py — both derive IDX from this string
 HEADER = 'sfc_wspd,sfc_wdir,t_slow,rh_slow,t_fast,dewpoint,der_rh,pressure,compass_dir,gps_date,gps_time,lat,lon,gps_alt,gps_spd,gps_dir,panel_temp'
 
 

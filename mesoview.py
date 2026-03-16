@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-MM Viewer — real-time web dashboard for Mobile Mesonet data.
+mesoview — real-time web dashboard for Mobile Mesonet data.
 Serves three interactive uPlot charts over SSE.
 
-Usage:  python viewer.py           # live mode
-        python viewer.py --test    # replay test_data/test.txt at 1 Hz
+Usage:  python mesoview.py           # live mode
+        python mesoview.py --test    # replay test_data/test.txt at 1 Hz
 Access: http://<host-ip>:8080  (any device on the network)
 """
 
@@ -84,7 +84,7 @@ threading.Thread(target=_version_worker, daemon=True).start()  # daemon=True so 
 def _log(msg):
     from datetime import datetime, timezone
     ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-    print(f'[{ts}] [viewer] {msg}', flush=True)  # flush=True ensures lines appear immediately in the supervisor log
+    print(f'[{ts}] [mesoview] {msg}', flush=True)  # flush=True ensures lines appear immediately in the supervisor log
 
 def _load_config():
     cfg_path = Path(__file__).parent / 'mesoview.config.json'
@@ -99,7 +99,7 @@ def _load_config():
 
 _CFG = _load_config()  # loaded once at startup; restart viewer to pick up config changes
 
-# Update DATA_DIR to match DATA_DIR in ingest.py
+# Update DATA_DIR to match DATA_DIR in mesoingest.py
 DATA_DIR      = Path(_CFG.get('data_dir', str(Path.home() / 'data' / 'raw' / 'mesonet'))).expanduser()
 WINDOW        = 600          # records of history served on /initial (~10 min) — unused since cache covers 2 hours
 UPLOT_VERSION = '1.6.31'     # pinned version of the uPlot charting library; update here to upgrade
@@ -107,7 +107,7 @@ HTTP_PORT     = int(_CFG.get('http_port', 8080))
 MDNS_HOSTNAME = _CFG.get('mdns_hostname', 'mesoview')  # advertised as <hostname>.local on the LAN
 
 # Column indices — derived from HEADER so they can't drift if columns are added/removed.
-# Must match HEADER in ingest.py.
+# Must match HEADER in mesoingest.py.
 HEADER = 'sfc_wspd,sfc_wdir,t_slow,rh_slow,t_fast,dewpoint,der_rh,pressure,compass_dir,gps_date,gps_time,lat,lon,gps_alt,gps_spd,gps_dir,panel_temp'
 _HDR = HEADER.split(',')  # intermediate list used to look up column positions by name
 IDX = {
@@ -146,7 +146,7 @@ def ensure_uplot():
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def today_file():
-    # returns the path to today's data file based on UTC date, matching the naming convention in ingest.py
+    # returns the path to today's data file based on UTC date, matching the naming convention in mesoingest.py
     return DATA_DIR / f"{datetime.now(timezone.utc).strftime('%Y%m%d')}.txt"
 
 def parse_row(row):
@@ -463,7 +463,7 @@ def update():
         def restart():
             time.sleep(0.5)  # brief delay so this HTTP response can finish before we exit
             # spawn a new shell that waits for this process to fully exit (freeing the port),
-            # then re-launches viewer.py with the same arguments using exec (replaces the shell process)
+            # then re-launches mesoview.py with the same arguments using exec (replaces the shell process)
             subprocess.Popen(
                 ['sh', '-c', 'sleep 1 && exec "$@"', '--', sys.executable] + sys.argv,
                 close_fds=True,  # close file descriptors so the child doesn't inherit the Flask socket

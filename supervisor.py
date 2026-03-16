@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Simple process supervisor for Mesoview.
+Simple process supervisor for meso360.
 
-Starts ingest, viewer, and SSH reverse tunnel processes, restarts them if
-they exit, and forwards signals for clean shutdown. Designed to be
-OS-agnostic (Windows/macOS/Linux).
+Starts mesoingest, mesoview, and mesosync (SSH reverse tunnel) processes,
+restarts them if they exit, and forwards signals for clean shutdown.
+Designed to be OS-agnostic (Windows/macOS/Linux).
 
 All output from child processes is written to a daily log file:
   <log_dir>/mesoview.YYYYMMDD.log
@@ -13,11 +13,11 @@ The log file rolls over at midnight; all children are restarted so they
 inherit the new file handle.
 
 Defaults:
-- ingest:  python ingest.py
-- viewer:  python viewer.py
-- tunnel:  ssh reverse tunnel to clamps@remote.bliss.science (port from config)
+- mesoingest:  python mesoingest.py
+- mesoview:    python mesoview.py
+- mesosync:    ssh reverse tunnel to clamps@remote.bliss.science (port from config)
 
-You can override ingest/viewer commands with environment variables:
+You can override mesoingest/mesoview commands with environment variables:
 - MESO_INGEST_CMD
 - MESO_VIEWER_CMD
 Each should be a full command line string.
@@ -81,8 +81,8 @@ def _split_cmd(cmd: str) -> List[str]:
 def _default_cmds() -> tuple[str, str]:
     py = shlex.quote(sys.executable)  # quote the Python path in case it contains spaces
     # allow the caller to override commands via environment variables (useful for testing or venvs)
-    ingest = os.environ.get('MESO_INGEST_CMD') or f'{py} ingest.py'
-    viewer  = os.environ.get('MESO_VIEWER_CMD') or f'{py} viewer.py'
+    ingest = os.environ.get('MESO_INGEST_CMD') or f'{py} mesoingest.py'
+    viewer  = os.environ.get('MESO_VIEWER_CMD') or f'{py} mesoview.py'
     return ingest, viewer
 
 
@@ -106,6 +106,43 @@ def _build_rtun_cmd(port: int) -> str:
         f'-i {key_str} '                     # use the NSSL/BLISS RSA key for authentication
         f'clamps@remote.bliss.science'       # remote server that acts as the tunnel endpoint
     )
+
+
+def _preflight(log_fh, cfg: dict) -> None:
+    """Run startup sanity checks and log PASS/WARN results before children are launched."""
+    _log(log_fh, '=== Preflight checks ===')
+
+    # Check 1 — Config file present next to this script
+    cfg_path = Path(__file__).parent / 'mesoview.config.json'
+    if cfg_path.exists():
+        _log(log_fh, f'  PASS  config file found: {cfg_path}')
+    else:
+        _log(log_fh, f'  WARN  config file not found: {cfg_path}')
+        _log(log_fh, '       Run: cp mesoview.config.example.json mesoview.config.json')
+
+    # Check 2 — Data directory is reachable and writable
+    default_data_dir = Path.home() / 'data' / 'raw' / 'mesonet'
+    data_dir = Path(cfg.get('data_dir', str(default_data_dir))).expanduser()
+    probe = data_dir / '.preflight_probe'
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)  # create the directory if it doesn't already exist
+        probe.write_text('ok')                        # confirm we can actually write inside it
+        probe.unlink()                                # clean up the probe file immediately
+        _log(log_fh, f'  PASS  data directory writable: {data_dir}')
+    except Exception as e:
+        _log(log_fh, f'  WARN  data directory not writable: {data_dir} ({e})')
+        _log(log_fh, f'       Fix permissions or set "data_dir" in mesoview.config.json')
+
+    # Check 3 — SSH key (only relevant when a reverse tunnel is configured)
+    if cfg.get('rtun_port') is not None:
+        key = Path.home() / '.ssh' / 'clamps_rsa'
+        if key.exists():
+            _log(log_fh, f'  PASS  SSH key found: {key}')
+        else:
+            _log(log_fh, f'  WARN  SSH key not found: {key}')
+            _log(log_fh, f'       Copy clamps_rsa to {key} — mesosync will not connect until this is done')
+
+    _log(log_fh, '========================')
 
 
 class Child:
@@ -149,11 +186,12 @@ def main() -> int:
 
     log_fh, log_date = _open_log(log_dir)
     _log(log_fh, f'starting — log: {log_fh.name}')
+    _preflight(log_fh, cfg)  # run sanity checks and log results before any children are launched
 
     ingest_cmd, viewer_cmd = _default_cmds()
     children: List[Child] = [
-        Child('ingest', ingest_cmd),
-        Child('viewer', viewer_cmd),
+        Child('mesoingest', ingest_cmd),
+        Child('mesoview',   viewer_cmd),
     ]
 
     # validate rtun_port before using it — a bad value in config should disable the tunnel, not crash the supervisor
@@ -165,11 +203,7 @@ def main() -> int:
             _log(log_fh, f'WARNING: rtun_port "{rtun_port}" is not a valid integer — SSH tunnel disabled')
             rtun_port = None
     if rtun_port:
-        key = Path.home() / '.ssh' / 'clamps_rsa'
-        if not key.exists():
-            # warn early so the user knows why the tunnel won't connect — it will still attempt to start
-            _log(log_fh, f'WARNING: SSH key not found at {key} — tunnel will likely fail')
-        children.append(Child('tunnel', _build_rtun_cmd(rtun_port)))
+        children.append(Child('mesosync', _build_rtun_cmd(rtun_port)))
     else:
         _log(log_fh, 'rtun_port not set in config — SSH tunnel disabled')
 

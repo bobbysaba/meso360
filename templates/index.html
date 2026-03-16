@@ -202,6 +202,9 @@
     .status-item { display: flex; flex-direction: column; gap: 2px; }
     .status-label { color: var(--subtext); }
     .status-val { font-weight: 600; }
+    #stat-gps.fix    { color: var(--wspd); }  /* green = GPS fix acquired */
+    #stat-gps.no-fix { color: var(--wdir); }  /* orange = no GPS fix */
+    #stat-age.stale  { color: var(--wdir); }  /* orange when record age exceeds 30 s */
 
     /* ── uPlot overrides ─────────────────────────────────────── */
     .u-legend {
@@ -469,28 +472,6 @@
     </div>
 
     <div class="card">
-      <div class="card-title">Status</div>
-      <div class="status-grid">
-        <div class="status-item">
-          <span class="status-label">Last update</span>
-          <span class="status-val" id="stat-last">--</span>
-        </div>
-        <div class="status-item">
-          <span class="status-label">Gaps (UTC day)</span>
-          <span class="status-val" id="stat-gaps">--</span>
-        </div>
-        <div class="status-item">
-          <span class="status-label">Completeness</span>
-          <span class="status-val" id="stat-comp">--</span>
-        </div>
-        <div class="status-item">
-          <span class="status-label">3‑min ΔP</span>
-          <span class="status-val" id="stat-ptrend">--</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
       <div class="card-title">Max Wind Speed</div>
       <div class="cv-row cv-wspd">
         <span class="cv-label">Speed</span>
@@ -510,6 +491,36 @@
       </div>
       <div style="text-align:right; margin-top:6px;">
         <button id="maxwind-reset-btn">Reset Max</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Status</div>
+      <div class="status-grid">
+        <div class="status-item">
+          <span class="status-label">Last update</span>
+          <span class="status-val" id="stat-last">--</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Gaps (UTC day)</span>
+          <span class="status-val" id="stat-gaps">--</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Completeness</span>
+          <span class="status-val" id="stat-comp">--</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">3‑min ΔP</span>
+          <span class="status-val" id="stat-ptrend">--</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">GPS fix</span>
+          <span class="status-val" id="stat-gps">--</span>  <!-- green = fix, orange = no fix -->
+        </div>
+        <div class="status-item">
+          <span class="status-label">Record age</span>
+          <span class="status-val" id="stat-age">--</span>  <!-- seconds since latest GPS timestamp; turns orange >30 s -->
+        </div>
       </div>
     </div>
 
@@ -1164,6 +1175,20 @@ function updateStatusSummary() {
   document.getElementById('stat-comp').textContent = comp == null ? '--' : `${comp.toFixed(1)} %`;
   const dP = pressureTrend(latest);
   document.getElementById('stat-ptrend').textContent = dP == null ? '--' : `${dP.toFixed(2)} hPa`;
+
+  // GPS fix: valid when the latest point has non-null lat and lon (null means GPS reported 'nan')
+  const gpsFix = buf.lat[n - 1] != null && buf.lon[n - 1] != null;
+  const gpsEl = document.getElementById('stat-gps');
+  gpsEl.textContent  = gpsFix ? 'Fix' : 'No Fix';
+  gpsEl.className    = 'status-val ' + (gpsFix ? 'fix' : 'no-fix');  // drives CSS color
+
+  // Record age: seconds between now and the GPS timestamp of the latest record
+  const ageSec = Math.round(Date.now() / 1000 - latest);
+  const ageEl  = document.getElementById('stat-age');
+  ageEl.textContent = ageSec < 60
+    ? `${ageSec}s ago`
+    : `${Math.floor(ageSec / 60)}m ${ageSec % 60}s ago`;
+  ageEl.className = 'status-val' + (ageSec > 30 ? ' stale' : '');  // turns orange to match the header dot
 }
 
 // ── Max wind tracker ──────────────────────────────────────────────────────────
@@ -1441,12 +1466,15 @@ const lastUpdEl  = document.getElementById('last-update');
 const STALE_MS   = 30_000;   // flag stale after 30 s without a data point
 let   lastDataAt = null;      // wall-clock ms of last real SSE message
 
-// Watchdog: runs every 5 s, marks dot+timestamp amber if data has gone quiet
+// Watchdog: runs every 5 s, marks dot+timestamp amber if data has gone quiet.
+// Also refreshes record age and GPS fix in the status card so they stay
+// current even when mesoingest has gone quiet and onmessage isn't firing.
 setInterval(() => {
   if (lastDataAt === null) return;  // no data yet since page load
   const stale = (Date.now() - lastDataAt) > STALE_MS;
   dot.classList.toggle('stale', stale);
   lastUpdEl.classList.toggle('stale', stale);
+  updateStatusSummary();  // keeps record age ticking upward when data is stale
 }, 5000);
 
 function connect() {

@@ -1,6 +1,28 @@
-# Mesoview
+# meso360
 
-Real-time web dashboard for NSSL Mobile Mesonet data. Fetches observations from the Campbell Scientific datalogger at 1 Hz, writes them to daily txt files, and serves live interactive charts over a local network.
+Real-time data system for NSSL Mobile Mesonet vehicles. Three components work together — **mesoingest**, **mesoview**, and **mesosync** — orchestrated by a single process supervisor.
+
+---
+
+## Components
+
+### mesoingest — `mesoingest.py`
+
+Fetches the newest observation from the Campbell Scientific datalogger at 1 Hz via its HTTP interface, formats it as a CSV row, and appends it to a daily `.txt` file. Writes a header on the first record of each day. Retries automatically on network errors and exits after a configurable number of consecutive failures so the supervisor can restart it.
+
+### mesoview — `mesoview.py`
+
+Flask web server that streams live data to any browser on the local network. Reads the daily `.txt` files written by mesoingest and pushes one JSON record per second to connected browsers over SSE (Server-Sent Events). Serves an interactive dashboard with real-time wind, temperature, pressure, and map charts built with uPlot. Also exposes `/initial` to preload the last 2 hours of history from an in-memory cache on page load.
+
+Run in `--test` mode to replay `test_data/test.txt` at 1 Hz with no datalogger required.
+
+### mesosync — SSH reverse tunnel (managed by `supervisor.py`)
+
+Maintains a persistent SSH reverse tunnel to `clamps@remote.bliss.science` so operators can reach the vehicle machine from outside the vehicle network. Uses `~/.ssh/clamps_rsa` for authentication. Each vehicle uses a unique `rtun_port` to avoid conflicts. The supervisor restarts the tunnel automatically if it drops.
+
+### supervisor — `supervisor.py`
+
+Starts mesoingest, mesoview, and mesosync as child processes, restarts any that exit unexpectedly, rotates the log file at midnight, and handles SIGINT/SIGTERM for clean shutdown. This is the only script you need to run. Works cross-platform (Windows/macOS/Linux).
 
 ---
 
@@ -9,22 +31,24 @@ Real-time web dashboard for NSSL Mobile Mesonet data. Fetches observations from 
 - Python 3.10 or later
 - [Miniforge](https://github.com/conda-forge/miniforge/releases) (recommended) **or** any Python installation with pip
 - OpenSSH client — built into macOS, Linux, and Windows 10/11 (no WSL required)
-- `~/.ssh/clamps_rsa` — the NSSL/BLISS RSA key must be present on each vehicle machine before the SSH tunnel will connect
+- `~/.ssh/clamps_rsa` — the NSSL/BLISS RSA key must be present on each vehicle machine before mesosync will connect
 
 ---
 
-## 1 — Clone the repo
+## Setup
+
+### 1 — Clone the repo
 
 ```bash
 git clone <repo-url>
-cd mesoview
+cd meso360
 ```
 
 ---
 
-## 2 — Set up the Python environment
+### 2 — Set up the Python environment
 
-### Option A — conda (recommended)
+#### Option A — conda (recommended)
 
 ```bash
 conda env create -f environment.yml
@@ -37,7 +61,7 @@ To update later after a `git pull`:
 conda env update -f environment.yml --prune
 ```
 
-### Option B — pip / venv
+#### Option B — pip / venv
 
 ```bash
 python -m venv .venv
@@ -53,7 +77,7 @@ pip install -r requirements.txt
 
 ---
 
-## 3 — Configure
+### 3 — Configure
 
 Copy the example config and edit it:
 
@@ -61,7 +85,7 @@ Copy the example config and edit it:
 cp mesoview.config.example.json mesoview.config.json
 ```
 
-`mesoview.config.json` is git-ignored so your local settings won't be overwritten by `git pull`. Open it and set your values:
+`mesoview.config.json` is git-ignored so your local settings won't be overwritten by `git pull`.
 
 ```json
 {
@@ -76,24 +100,20 @@ cp mesoview.config.example.json mesoview.config.json
 }
 ```
 
-| Key | Description | Default |
-|-----|-------------|---------|
-| `data_dir` | Where daily `.txt` data files are written and read | `~/data/raw/mesonet` |
-| `log_dir` | Where daily log files are written (`mesoview.YYYYMMDD.log`) | `~/mesoview_logs` |
-| `logger_ip` | IP address of the Campbell datalogger on the vehicle network | `192.168.4.6` |
-| `http_port` | Port the web viewer listens on | `8080` |
-| `mdns_hostname` | mDNS hostname for the viewer (if your network supports it) | `mesoview` |
-| `ingest_retry_max` | Max fetch attempts before the ingest script exits | `100` |
-| `ingest_retry_delay` | Seconds between retry attempts | `5` |
-| `rtun_port` | Port for the SSH reverse tunnel to `remote.bliss.science` — **unique per vehicle** to avoid conflicts | *(required)* |
-
-> **SSH tunnel** — `supervisor.py` automatically maintains a reverse SSH tunnel to `clamps@remote.bliss.science` using `~/.ssh/clamps_rsa`. Each vehicle must use a unique `rtun_port`. The tunnel is managed cross-platform (Windows/macOS/Linux) via the system `ssh` client; no WSL or additional tooling is required. If the tunnel drops, the supervisor restarts it automatically.
+| Key | Component | Description | Default |
+|-----|-----------|-------------|---------|
+| `data_dir` | mesoingest / mesoview | Where daily `.txt` data files are written and read | `~/data/raw/mesonet` |
+| `log_dir` | supervisor | Where daily log files are written (`mesoview.YYYYMMDD.log`) | `~/mesoview_logs` |
+| `logger_ip` | mesoingest | IP address of the Campbell datalogger on the vehicle network | `192.168.4.6` |
+| `http_port` | mesoview | Port the web dashboard listens on | `8080` |
+| `mdns_hostname` | mesoview | mDNS hostname advertised as `<hostname>.local` on the LAN | `mesoview` |
+| `ingest_retry_max` | mesoingest | Max consecutive fetch failures before mesoingest exits | `100` |
+| `ingest_retry_delay` | mesoingest | Seconds between retry attempts | `5` |
+| `rtun_port` | mesosync | Port for the SSH reverse tunnel — **unique per vehicle** to avoid conflicts | *(required)* |
 
 ---
 
-## 4 — Run manually
-
-`supervisor.py` starts the ingest script, the viewer, and the SSH reverse tunnel together, and automatically restarts any of them if they crash.
+### 4 — Run
 
 ```bash
 # Make sure your environment is active first
@@ -102,11 +122,33 @@ conda activate mesoview   # or: source .venv/bin/activate
 python supervisor.py
 ```
 
+On startup, supervisor runs a set of preflight checks before launching any child processes and logs the results:
+
+```
+[supervisor] === Preflight checks ===
+[supervisor]   PASS  config file found: .../mesoview.config.json
+[supervisor]   PASS  data directory writable: ~/data/raw/mesonet
+[supervisor]   PASS  SSH key found: ~/.ssh/clamps_rsa
+[supervisor] ========================
+```
+
+Any issue that needs user action appears as `WARN` with an explanation and the exact command or step to resolve it. All warnings are non-blocking — supervisor still starts, and each component handles its own retry logic.
+
 Open a browser on any device connected to the same network and go to:
 
 ```
 http://<host-machine-ip>:8080
 ```
+
+Or, if your network supports mDNS/Bonjour:
+
+```
+http://mesoview.local:8080
+```
+
+---
+
+## Dashboard
 
 ### Status indicator
 
@@ -115,26 +157,43 @@ The colored dot in the top-left of the dashboard shows the current data feed hea
 | Color | Meaning |
 |-------|---------|
 | Green | Connected and receiving data normally |
-| Orange | Connected but no data received in the last 30 seconds — ingest may be down, the datalogger may be unreachable, or the rack may not be powered on |
-| Red | SSE connection to the viewer server lost — the viewer process may be down or the network between your browser and the host machine is interrupted |
+| Orange | Connected but no data received in the last 30 seconds — mesoingest may be down, the datalogger may be unreachable, or the rack may not be powered on |
+| Red | SSE connection to mesoview lost — the mesoview process may be down or the network between your browser and the host machine is interrupted |
 
-If the dot is orange, check the log file for `WARNING` messages from ingest.
+If the dot is orange, check the log file for `WARNING` messages from mesoingest.
 
-All output from both scripts is written to `~/mesoview_logs/mesoview.YYYYMMDD.log` (configurable via `log_dir`). To watch it live:
+### Status card
+
+The **Status** card at the bottom of the right sidebar shows additional system health details:
+
+| Field | Description |
+|-------|-------------|
+| Last update | Time of the most recently received data point |
+| Gaps (UTC day) | Number of data gaps detected since UTC midnight |
+| Completeness | Percentage of expected 1 Hz readings received in the last 10 minutes |
+| 3‑min ΔP | Pressure change over the last 3 minutes (hPa) — useful for detecting rapid pressure falls |
+| GPS fix | **Fix** (green) = valid GPS position; **No Fix** (orange) = GPS reporting `nan`, position unavailable |
+| Record age | Seconds since the latest GPS timestamp — turns orange when >30 s, matching the connection dot |
+
+### Logs
+
+All output from all three components is written to `~/mesoview_logs/mesoview.YYYYMMDD.log` (configurable via `log_dir`). To watch it live:
 
 ```bash
 tail -f ~/mesoview_logs/mesoview.$(date +%Y%m%d).log
 ```
 
-To run in test/replay mode (no datalogger needed):
+### Test / replay mode
+
+To run with no datalogger (replays `test_data/test.txt` at 1 Hz):
 
 ```bash
-python viewer.py --test
+python mesoview.py --test
 ```
 
 ---
 
-## 5 — Run on startup
+## Run on startup
 
 The goal is to have `supervisor.py` launch automatically when the host machine boots, using the Python executable from your environment. Find that path first:
 
@@ -145,8 +204,8 @@ which python          # macOS / Linux
 where python          # Windows — copy the full path shown
 
 # venv
-# macOS / Linux: /path/to/mesoview/.venv/bin/python
-# Windows:       C:\path\to\mesoview\.venv\Scripts\python.exe
+# macOS / Linux: /path/to/meso360/.venv/bin/python
+# Windows:       C:\path\to\meso360\.venv\Scripts\python.exe
 ```
 
 ---
@@ -165,9 +224,9 @@ Create `~/Library/LaunchAgents/com.mesoview.plist`:
   <key>ProgramArguments</key>
   <array>
     <string>/Users/YOUR_USER/miniforge3/envs/mesoview/bin/python</string>
-    <string>/path/to/mesoview/supervisor.py</string>
+    <string>/path/to/meso360/supervisor.py</string>
   </array>
-  <key>WorkingDirectory</key>  <string>/path/to/mesoview</string>
+  <key>WorkingDirectory</key>  <string>/path/to/meso360</string>
   <key>RunAtLoad</key>         <true/>
   <key>KeepAlive</key>         <true/>
 </dict>
@@ -188,27 +247,17 @@ launchctl unload ~/Library/LaunchAgents/com.mesoview.plist
 
 ---
 
-### Linux — cron
+### Linux — systemd (recommended)
 
-```bash
-crontab -e
-```
-
-Add this line (replace paths):
-
-```
-@reboot cd /path/to/mesoview && /path/to/conda/envs/mesoview/bin/python supervisor.py
-```
-
-Or use a **systemd user service** for better logging and control. Create `~/.config/systemd/user/mesoview.service`:
+Create `~/.config/systemd/user/mesoview.service`:
 
 ```ini
 [Unit]
-Description=Mesoview supervisor
+Description=meso360 supervisor
 After=network.target
 
 [Service]
-WorkingDirectory=/path/to/mesoview
+WorkingDirectory=/path/to/meso360
 ExecStart=/path/to/conda/envs/mesoview/bin/python supervisor.py
 Restart=on-failure
 RestartSec=5
@@ -225,6 +274,18 @@ systemctl --user start mesoview
 systemctl --user status mesoview   # check logs
 ```
 
+#### Linux — cron (alternative)
+
+```bash
+crontab -e
+```
+
+Add this line (replace paths):
+
+```
+@reboot cd /path/to/meso360 && /path/to/conda/envs/mesoview/bin/python supervisor.py
+```
+
 ---
 
 ### Windows — Task Scheduler
@@ -237,7 +298,7 @@ systemctl --user status mesoview   # check logs
      `C:\Users\YOU\miniforge3\envs\mesoview\python.exe`
    - **Add arguments**: `supervisor.py`
    - **Start in**: full path to the repo directory, e.g.
-     `C:\path\to\mesoview`
+     `C:\path\to\meso360`
 5. **Settings** tab: check *If the task fails, restart every 1 minute*
 6. Click OK and enter your Windows password when prompted
 
@@ -259,16 +320,18 @@ No other steps needed — the config file is not touched by git updates.
 ## File layout
 
 ```
-mesoview/
-├── supervisor.py          # start here — runs ingest, viewer, and SSH tunnel; auto-restarts all
-├── ingest.py              # fetches data from the datalogger at 1 Hz
-├── viewer.py              # Flask SSE server + web dashboard
+meso360/
+├── supervisor.py          # start here — runs mesoingest, mesoview, and mesosync; auto-restarts all
+├── mesoingest.py          # fetches data from the datalogger at 1 Hz; writes daily .txt files
+├── mesoview.py            # Flask SSE server + web dashboard
 ├── mesoview.config.example.json   # copy to mesoview.config.json and edit
 ├── environment.yml        # conda environment spec
 ├── requirements.txt       # pip fallback
 ├── templates/
 │   └── index.html         # single-page dashboard
-├── static/                # uPlot chart library
-└── test_data/
-    └── test.txt           # sample data for --test mode
+├── static/                # uPlot chart library (auto-downloaded on first run)
+├── test_data/
+│   └── test.txt           # sample data for --test mode
+└── docs/
+    └── meso360_field_guide.md     # full reference: installation, dashboard guide, variables, troubleshooting
 ```
