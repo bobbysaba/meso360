@@ -167,11 +167,15 @@
 
     #compass-canvas { display: block; }
 
-    #compass-deg {
+    #compass-labels {
+      display: flex;
+      gap: 12px;
       font-size: 0.85rem;
-      color: var(--wdir);
       letter-spacing: 0.06em;
     }
+    .compass-lbl { color: var(--subtext); }
+    #compass-deg { color: #fab387; }  /* heading = orange */
+    #compass-wnd { color: #89b4fa; }  /* wind direction = blue */
 
     /* ── Current values ──────────────────────────────────────── */
     .cv-row {
@@ -289,7 +293,7 @@
     html.is-mobile #sidebar .card-title  { font-size: 0.78rem; }
     html.is-mobile #sidebar .cv-row      { font-size: 0.80rem; padding: 5px 0; }
     html.is-mobile #sidebar .status-grid { font-size: 0.78rem; }
-    html.is-mobile #sidebar #compass-deg { font-size: 0.85rem; }
+    html.is-mobile #sidebar #compass-labels { font-size: 0.78rem; gap: 8px; }
     /* Touch-friendly button targets — minimum 36px height meets accessibility tap target guidelines */
     html.is-mobile #live-btn,
     html.is-mobile #reset-btn {
@@ -410,10 +414,13 @@
   <!-- sidebar: right column, holds the compass, current values, averages, status, and max wind cards -->
   <div id="sidebar">
     <div class="card">
-      <div class="card-title">Heading</div>
+      <div class="card-title">Heading &amp; Wind</div>
       <div id="compass-wrap">
         <canvas id="compass-canvas" width="200" height="200"></canvas>
-        <div id="compass-deg">---°</div>
+        <div id="compass-labels">
+          <span class="compass-lbl">HDG <span id="compass-deg">---°</span></span>
+          <span class="compass-lbl">WND <span id="compass-wnd">---°</span></span>
+        </div>
       </div>
     </div>
     <div class="card">
@@ -1248,6 +1255,12 @@ function pushToCharts() {
       const wspdChart = IS_MOBILE ? charts.wspd : charts.wind;
       wspdChart.setScale('wspd', { min: 0, max: stepZ * 4 });
     }
+    const pRangeZ = paddedRange(minMaxVisible('pressure', zoomedRange.min, zoomedRange.max), 0.04, 0.8);
+    if (pRangeZ) {
+      const pMidZ  = (pRangeZ.min + pRangeZ.max) / 2;
+      const pHalfZ = Math.max((pRangeZ.max - pRangeZ.min) / 2, 5);
+      charts.pressure.setScale('y', { min: pMidZ - pHalfZ, max: pMidZ + pHalfZ });
+    }
   } else if (buf.ts.length >= 1) {
     // Live mode: show a rolling VIEW_SEC-wide window ending at the latest point.
     // buf.ts is chronological so the last element is always the newest timestamp.
@@ -1274,7 +1287,12 @@ function pushToCharts() {
       wspdChart.setScale('wspd', { min, max });
     }
     const pRange = paddedRange(minMaxVisible('pressure', xMin, xMax), 0.04, 0.8);
-    if (pRange) charts.pressure.setScale('y', pRange);
+    if (pRange) {
+      // Enforce a minimum 10 hPa window so small swings don't fill the entire axis.
+      const pMid  = (pRange.min + pRange.max) / 2;
+      const pHalf = Math.max((pRange.max - pRange.min) / 2, 5);  // 5 each side = 10 hPa minimum
+      charts.pressure.setScale('y', { min: pMid - pHalf, max: pMid + pHalf });
+    }
   }
 }
 
@@ -1347,7 +1365,8 @@ function appendPoint(p) {
 // ── Compass ───────────────────────────────────────────────────────────────────
 // Full canvas redraw on every update. At 1 Hz the cost is negligible.
 // Pass deg=null to draw just the static rose (used on init before first data).
-function drawCompass(deg) {
+// wdir is the wind direction in degrees (optional); drawn as a blue arrow.
+function drawCompass(deg, wdir) {
   const canvas = document.getElementById('compass-canvas');
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
@@ -1388,10 +1407,28 @@ function drawCompass(deg) {
     ctx.fillText(lbl, cx + Math.cos(a) * (R - 18), cy + Math.sin(a) * (R - 18));
   }
 
+  const dotR = 3.5;
+
+  // ── Wind direction arrow (blue) — drawn before heading so heading renders on top ──
+  if (wdir != null) {
+    const wa = (wdir - 90) * Math.PI / 180;
+    const wTipX  = cx + Math.cos(wa) * (R * 0.65);
+    const wTipY  = cy + Math.sin(wa) * (R * 0.65);
+    const wStemX = cx + Math.cos(wa) * (dotR + 1);
+    const wStemY = cy + Math.sin(wa) * (dotR + 1);
+    ctx.lineWidth = 2.5; ctx.strokeStyle = '#89b4fa';
+    ctx.beginPath(); ctx.moveTo(wStemX, wStemY); ctx.lineTo(wTipX, wTipY); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(wTipX, wTipY);
+    ctx.lineTo(wTipX + Math.cos(wa + 2.6) * 9, wTipY + Math.sin(wa + 2.6) * 9);
+    ctx.lineTo(wTipX + Math.cos(wa - 2.6) * 9, wTipY + Math.sin(wa - 2.6) * 9);
+    ctx.closePath(); ctx.fillStyle = '#89b4fa'; ctx.fill();
+  }
+
   if (deg == null) return;
 
+  // ── Heading arrow (orange) ────────────────────────────────────────────────────
   const a = (deg - 90) * Math.PI / 180;
-  const dotR = 3.5;
   const tipX  = cx + Math.cos(a) * (R * 0.65);
   const tipY  = cy + Math.sin(a) * (R * 0.65);
   const stemX = cx + Math.cos(a) * (dotR + 1);
@@ -1426,8 +1463,9 @@ function updateCurrentValues(p) {
   document.getElementById('cv-wdir').textContent     = p.wdir     != null ? `${fmt2(p.wdir)}°`         : '--';
   document.getElementById('cv-thetae').textContent   = the        != null ? `${the.toFixed(1)} K`      : '--';
 
-  drawCompass(p.compass_dir);
+  drawCompass(p.compass_dir, p.wdir);
   document.getElementById('compass-deg').textContent = p.compass_dir != null ? `${fmt2(p.compass_dir)}°` : '---°';
+  document.getElementById('compass-wnd').textContent = p.wdir        != null ? `${fmt2(p.wdir)}°`        : '---°';
   document.getElementById('last-update').textContent =
     new Date(p.ts * 1000).toISOString().slice(11, 19) + ' UTC';
 }

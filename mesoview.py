@@ -24,7 +24,10 @@ except Exception:
     ServiceInfo = None
     Zeroconf = None
 
-parser = argparse.ArgumentParser(add_help=False)
+parser = argparse.ArgumentParser(
+    prog='mesoview',
+    description='Real-time web dashboard for NSSL Mobile Mesonet data.',
+)
 parser.add_argument('--test', action='store_true', help='Run in test/replay mode')
 parser.add_argument('--test-start-offset', type=int, default=0,
                     help='(test mode) seconds after first data point to start replay')
