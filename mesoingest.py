@@ -12,37 +12,21 @@ import requests                      # HTTP client used to query the datalogger 
 from pathlib import Path
 from datetime import timezone
 from html.parser import HTMLParser   # used to extract values from the datalogger's HTML table response
-import json
+from common import DEFAULT_DATA_DIR, HEADER, load_config
 
 def _log(msg):
     # prefix every log line with a UTC timestamp so log entries are unambiguous across time zones
     ts = dt.datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     print(f'[{ts}] [mesoingest] {msg}', flush=True)  # flush=True ensures output appears immediately in the supervisor log
 
-def _load_config():
-    cfg_path = Path(__file__).parent / 'meso360.config.json'
-    if not cfg_path.exists():
-        return {}  # no config file is fine; all settings fall back to hardcoded defaults below
-    try:
-        with open(cfg_path) as f:
-            return json.load(f) or {}  # 'or {}' guards against an empty/null JSON file
-    except Exception as e:
-        _log(f'Warning: could not read config {cfg_path}: {e}')
-        return {}  # return empty dict so callers always get a dict, never None
-
-_CFG = _load_config()
+_CFG = load_config(_log)
 
 # set vehicle-specific variables
-DATA_DIR = Path(_CFG.get('data_dir', str(Path.home() / 'data' / 'raw' / 'mesonet'))).expanduser()  # where daily .txt files are written
+DATA_DIR = Path(_CFG.get('data_dir', str(DEFAULT_DATA_DIR))).expanduser()  # where daily .txt files are written
 IP = _CFG.get('logger_ip', '192.168.4.6')  # LAN IP of the Campbell Scientific datalogger; default is the NSSL truck address
 
 MAX_TRIES    = int(_CFG.get('ingest_retry_max',   100))  # how many consecutive failures before giving up and exiting
 RETRY_DELAY  = int(_CFG.get('ingest_retry_delay',   5))  # seconds to wait between retry attempts
-
-# column names written as the first line of each daily data file
-# must stay in sync with HEADER in mesoview.py — both derive IDX from this string
-HEADER = 'sfc_wspd,sfc_wdir,t_slow,rh_slow,t_fast,dewpoint,der_rh,pressure,compass_dir,gps_date,gps_time,lat,lon,gps_alt,gps_spd,gps_dir,panel_temp'
-
 
 class TableParser(HTMLParser):
     """Lightweight HTML table parser — extracts all <td> text content."""

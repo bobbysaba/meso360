@@ -133,7 +133,7 @@ On startup, supervisor runs a set of preflight checks before launching any child
 [supervisor] ========================
 ```
 
-The fourth check fetches the remote and pulls any new commits automatically before children start — so the system always boots on the latest code. If an update is pulled, the output shows the git log instead of "up to date".
+The fourth check looks for updates with `git fetch` and compares local vs upstream commit SHAs. If the worktree is clean and the remote is ahead, supervisor runs `git pull` before children start. If local uncommitted changes are present, supervisor logs a `WARN` and skips the automatic pull to avoid overwriting local work.
 
 Any issue that needs user action appears as `WARN` with an explanation and the exact command or step to resolve it. All warnings are non-blocking — supervisor still starts, and each component handles its own retry logic.
 
@@ -311,9 +311,11 @@ To test without rebooting: right-click the task → **Run**.
 
 ## Updating
 
-**At startup:** supervisor automatically runs `git pull` as part of the preflight checks, so the system always boots on the latest code. No manual action needed.
+**At startup:** supervisor checks for updates during preflight. If the repo is clean and the remote is ahead, it runs `git pull` before launching the child processes. If the repo has local uncommitted changes, it skips the pull and logs a warning instead.
 
-**Mid-operations:** if an update is available while the system is running, an `↑ Update · <commit>` button appears in the bottom-right corner of the dashboard. Clicking it pulls the latest code and restarts all three components (mesoingest, mesoview, mesosync) within a few seconds. The dashboard reconnects automatically.
+**Mid-operations:** if an update is available while the system is running, an `↑ Update · <commit>` button appears in the bottom-right corner of the dashboard. The button is only shown when the repo is clean, and the `/update` endpoint only accepts requests from the host machine running `mesoview`. Clicking it runs `git pull` and restarts all three components (mesoingest, mesoview, mesosync) within a few seconds. The dashboard reconnects automatically.
+
+**Local changes:** if the repo has uncommitted local changes, the dashboard shows an orange `DEV` badge instead of the Update button. This indicates the auto-update path is blocked until those changes are committed or discarded.
 
 **New dependencies:** if a pull adds new Python packages, update the environment manually:
 

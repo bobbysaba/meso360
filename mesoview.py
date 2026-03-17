@@ -8,13 +8,16 @@ Usage:  python mesoview.py           # live mode
 Access: http://<host-ip>:8080  (any device on the network)
 """
 
-from flask import Flask, Response, render_template, jsonify
+from flask import Flask, Response, jsonify, render_template, request
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 import math
 import argparse, csv, time, json, socket, urllib.request, webbrowser
 import subprocess, os, sys, threading, atexit
+import ipaddress
 from collections import deque  # used for the fixed-size in-memory data cache
+
+from common import DEFAULT_DATA_DIR, HEADER, REPO_DIR, load_config
 
 # zeroconf enables http://mesoview.local discovery on the LAN without knowing the host IP
 # it's optional — if not installed, mDNS is skipped and the numeric IP still works
@@ -49,32 +52,31 @@ _ver_lock = threading.Lock()  # protects _ver_cache from concurrent reads/writes
 
 def _version_worker():
     """Fetch git status/remote once immediately, then every 5 minutes."""
-    repo_dir = Path(__file__).parent
     while True:
         try:
             # get the short commit hash shown in the dashboard header
             commit = subprocess.run(
                 ['git', 'rev-parse', '--short', 'HEAD'],
-                cwd=repo_dir, capture_output=True, text=True, timeout=5,
+                cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
             ).stdout.strip()
             # porcelain output is non-empty if there are any uncommitted changes
             dirty = bool(subprocess.run(
                 ['git', 'status', '--porcelain'],
-                cwd=repo_dir, capture_output=True, text=True, timeout=5,
+                cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
             ).stdout.strip())
             # fetch from remote so we can compare local vs remote SHA
             subprocess.run(
                 ['git', 'fetch', '--quiet'],
-                cwd=repo_dir, capture_output=True, text=True, timeout=15,
+                cwd=REPO_DIR, capture_output=True, text=True, timeout=15,
             )
             local_sha = subprocess.run(
                 ['git', 'rev-parse', 'HEAD'],
-                cwd=repo_dir, capture_output=True, text=True, timeout=5,
+                cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
             ).stdout.strip()
             # @{u} resolves to the upstream (remote tracking) branch of the current branch
             remote_sha = subprocess.run(
                 ['git', 'rev-parse', '@{u}'],
-                cwd=repo_dir, capture_output=True, text=True, timeout=5,
+                cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
             ).stdout.strip()
             # an update is available if remote SHA exists and differs from local SHA
             update_available = bool(local_sha and remote_sha and local_sha != remote_sha)
@@ -93,27 +95,17 @@ def _log(msg):
     print(f'[{ts}] [mesoview] {msg}', flush=True)  # flush=True ensures lines appear immediately in the supervisor log
 
 def _load_config():
-    cfg_path = Path(__file__).parent / 'meso360.config.json'
-    if not cfg_path.exists():
-        return {}  # missing config is fine; all values fall back to defaults below
-    try:
-        with open(cfg_path) as f:
-            return json.load(f) or {}
-    except Exception as e:
-        _log(f'Warning: could not read config {cfg_path}: {e}')
-        return {}
+    return load_config(_log)
 
 _CFG = _load_config()  # loaded once at startup; restart viewer to pick up config changes
 
 # Update DATA_DIR to match DATA_DIR in mesoingest.py
-DATA_DIR      = Path(_CFG.get('data_dir', str(Path.home() / 'data' / 'raw' / 'mesonet'))).expanduser()
+DATA_DIR      = Path(_CFG.get('data_dir', str(DEFAULT_DATA_DIR))).expanduser()
 UPLOT_VERSION = '1.6.31'     # pinned version of the uPlot charting library; update here to upgrade
 HTTP_PORT     = int(_CFG.get('http_port', 8080))
 MDNS_HOSTNAME = _CFG.get('mdns_hostname', 'mesoview')  # advertised as <hostname>.local on the LAN
 
 # Column indices — derived from HEADER so they can't drift if columns are added/removed.
-# Must match HEADER in mesoingest.py.
-HEADER = 'sfc_wspd,sfc_wdir,t_slow,rh_slow,t_fast,dewpoint,der_rh,pressure,compass_dir,gps_date,gps_time,lat,lon,gps_alt,gps_spd,gps_dir,panel_temp'
 _HDR = HEADER.split(',')  # intermediate list used to look up column positions by name
 IDX = {
     'wspd':        _HDR.index('sfc_wspd'),      # surface wind speed
@@ -263,6 +255,16 @@ def advertise_mdns(hostname='mesoview', port=8080):
 # Holds up to 2 hours of parsed points so /initial never reads from disk.
 _data_buf: deque = deque(maxlen=7200)  # 7200 = 2 hours at 1 Hz; oldest points are auto-dropped when full
 _data_lock = threading.Lock()          # guards _data_buf against concurrent access from Flask threads and _cache_worker
+_data_cond = threading.Condition(_data_lock)
+_data_seq = 0
+
+
+def _append_point(p) -> None:
+    global _data_seq
+    with _data_cond:
+        _data_buf.append(p)
+        _data_seq += 1
+        _data_cond.notify_all()
 
 def _cache_worker():
     """Background thread: pre-populates _data_buf from existing files on
@@ -280,12 +282,13 @@ def _cache_worker():
                 for row in reader:
                     p = parse_row(row)
                     if p and p['ts'] >= cutoff:  # only load points within the 2-hour window
-                        with _data_lock:
-                            _data_buf.append(p)
+                        _append_point(p)
 
     # ── Tail loop: append new points as ingest writes them ───────────────────
     path = today_file()
     while not path.exists():  # wait for ingest to create today's file before starting to tail
+        if int(time.time()) % 60 < 2:
+            _log(f'WARNING: still waiting for data file {path}')
         time.sleep(2)
         path = today_file()
     pos = path.stat().st_size  # start at the end of the file so we only pick up new lines
@@ -311,8 +314,7 @@ def _cache_worker():
             for line in lines:
                 p = parse_row(next(csv.reader([line.strip()]), []))
                 if p:
-                    with _data_lock:
-                        _data_buf.append(p)  # add new point to the rolling cache
+                    _append_point(p)  # add new point to the rolling cache
 
         time.sleep(1)  # poll the file once per second, matching ingest's ~1 Hz write rate
 
@@ -384,53 +386,31 @@ def stream():
                 start_ts = data[-1]['ts']  # clamp so we don't skip past the end
             data = [p for p in data if p['ts'] >= start_ts]
         _log(f'TEST stream points={len(data)} (offset={TEST_START_OFFSET}s)')
+        if not data:
+            while True:
+                yield ': keep-alive\n\n'
+                time.sleep(2)
         while True:
             for p in data:
                 yield f'data: {json.dumps(p)}\n\n'  # SSE format: "data: <payload>\n\n"
                 time.sleep(1)                        # emit one point per second to simulate live 1 Hz data
 
     def generate():
-        path = today_file()
-
-        # Wait for the data file to appear (ingest may not have started yet)
-        _wait_secs = 0
-        while not path.exists():
-            yield ': keep-alive\n\n'   # SSE comment line; keeps the connection alive while waiting
-            time.sleep(2)
-            _wait_secs += 2
-            if _wait_secs % 60 == 0:  # log a warning every minute so the user knows something is wrong
-                _log(f'WARNING: still waiting for data file {path} ({_wait_secs}s elapsed)')
-            path = today_file()        # re-evaluate in case the date rolled over while waiting
-
-        pos = path.stat().st_size   # start at end of file (no replay) so clients only see new data
-
+        keepalive_interval = 2
+        with _data_lock:
+            last_seq = _data_seq
         while True:
-            # Handle day rollover
-            new_path = today_file()
-            if new_path != path:
-                # date has changed — switch to the new file
-                path = new_path
-                # Skip header row on day rollover
-                if path.exists():
-                    with open(path) as fh:
-                        fh.readline()      # skip the header on the new file
-                        pos = fh.tell()    # advance pos past the header
+            with _data_cond:
+                changed = _data_cond.wait_for(lambda: _data_seq != last_seq, timeout=keepalive_interval)
+                if changed:
+                    point = _data_buf[-1]
+                    last_seq = _data_seq
                 else:
-                    pos = 0  # new file doesn't exist yet; will wait for it on the next iteration
-
-            if path.exists():
-                with open(path) as fh:
-                    fh.seek(pos)          # jump to where we last read
-                    if pos == 0:
-                        fh.readline()     # skip header when starting from top of a new file
-                    lines = fh.readlines()
-                    pos = fh.tell()       # save position for the next iteration
-                for line in lines:
-                    p = parse_row(next(csv.reader([line.strip()]), []))
-                    if p:
-                        yield f'data: {json.dumps(p)}\n\n'  # push the new point to the browser
-
-            time.sleep(1)  # poll once per second, matching ingest's ~1 Hz write rate
+                    point = None
+            if point is None:
+                yield ': keep-alive\n\n'
+            else:
+                yield f'data: {json.dumps(point)}\n\n'
 
     return Response(
         generate_test() if TEST_MODE else generate(),
@@ -441,6 +421,38 @@ def stream():
         },
     )
 
+
+def _current_git_dirty() -> bool:
+    return bool(subprocess.run(
+        ['git', 'status', '--porcelain'],
+        cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
+    ).stdout.strip())
+
+
+def _local_request_addrs() -> set[str]:
+    addrs = {'127.0.0.1', '::1'}
+    try:
+        addrs.add(get_local_ip())
+    except Exception:
+        pass
+    try:
+        for family, _socktype, _proto, _canonname, sockaddr in socket.getaddrinfo(socket.gethostname(), None):
+            if family in (socket.AF_INET, socket.AF_INET6):
+                addrs.add(sockaddr[0])
+    except Exception:
+        pass
+    return addrs
+
+
+def _request_is_local() -> bool:
+    addr = request.remote_addr or ''
+    try:
+        if ipaddress.ip_address(addr).is_loopback:
+            return True
+    except ValueError:
+        return False
+    return addr in _local_request_addrs()
+
 @app.route('/version')
 def version():
     """Return cached git status (populated by background thread)."""
@@ -450,11 +462,14 @@ def version():
 @app.route('/update', methods=['POST'])
 def update():
     """Run git pull in the repo directory, then restart the server process."""
-    repo_dir = Path(__file__).parent
+    if not _request_is_local():
+        return jsonify({'ok': False, 'output': 'Update is only allowed from the host machine.', 'changed': False}), 403
+    if _current_git_dirty():
+        return jsonify({'ok': False, 'output': 'Working tree has local changes; commit or discard them before updating.', 'changed': False}), 409
     try:
         result = subprocess.run(
             ['git', 'pull'],
-            cwd=repo_dir,
+            cwd=REPO_DIR,
             capture_output=True,
             text=True,
             timeout=30,

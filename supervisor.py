@@ -36,23 +36,19 @@ from datetime import date
 from pathlib import Path
 from typing import List, Optional
 
+from common import CONFIG_PATH, DEFAULT_DATA_DIR, DEFAULT_LOG_DIR, REPO_DIR, load_config
+
 RESTART_DELAY_SEC = 2   # seconds to wait between terminate() and kill() during restarts
 UPDATE_EXIT_CODE  = 42  # mesoview exits with this code after a successful git pull to trigger a full restart
 
 
 def _load_config() -> dict:
-    cfg_path = Path(__file__).parent / 'meso360.config.json'
-    if not cfg_path.exists():
-        return {}  # no config file is fine; all settings fall back to defaults
-    try:
-        with open(cfg_path) as f:
-            return json.load(f) or {}  # 'or {}' guards against an empty/null JSON file
-    except Exception as e:
-        # datetime is imported locally here because the module-level _log helper isn't defined yet
+    def _startup_log(msg: str) -> None:
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-        print(f'[{ts}] [supervisor] Warning: could not read config {cfg_path}: {e}', flush=True)
-        return {}
+        print(f'[{ts}] [supervisor] {msg}', flush=True)
+
+    return load_config(_startup_log)
 
 
 def _open_log(log_dir: Path) -> tuple[object, date]:
@@ -114,16 +110,14 @@ def _preflight(log_fh, cfg: dict) -> None:
     _log(log_fh, '=== Preflight checks ===')
 
     # Check 1 — Config file present next to this script
-    cfg_path = Path(__file__).parent / 'meso360.config.json'
-    if cfg_path.exists():
-        _log(log_fh, f'  PASS  config file found: {cfg_path}')
+    if CONFIG_PATH.exists():
+        _log(log_fh, f'  PASS  config file found: {CONFIG_PATH}')
     else:
-        _log(log_fh, f'  WARN  config file not found: {cfg_path}')
+        _log(log_fh, f'  WARN  config file not found: {CONFIG_PATH}')
         _log(log_fh, '       Run: cp meso360.config.example.json meso360.config.json')
 
     # Check 2 — Data directory is reachable and writable
-    default_data_dir = Path.home() / 'data' / 'raw' / 'mesonet'
-    data_dir = Path(cfg.get('data_dir', str(default_data_dir))).expanduser()
+    data_dir = Path(cfg.get('data_dir', str(DEFAULT_DATA_DIR))).expanduser()
     probe = data_dir / '.preflight_probe'
     try:
         data_dir.mkdir(parents=True, exist_ok=True)  # create the directory if it doesn't already exist
@@ -144,25 +138,33 @@ def _preflight(log_fh, cfg: dict) -> None:
             _log(log_fh, f'       Copy clamps_rsa to {key} — mesosync will not connect until this is done')
 
     # Check 4 — Git update check (fetch remote, pull if behind)
-    repo_dir = Path(__file__).parent
     try:
+        dirty = bool(subprocess.run(
+            ['git', 'status', '--porcelain'],
+            cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
+        ).stdout.strip())
+        if dirty:
+            _log(log_fh, '  WARN  local git changes detected; skipping automatic git pull')
+            _log(log_fh, '       Commit or discard local edits before updating from remote')
+            _log(log_fh, '========================')
+            return
         subprocess.run(
             ['git', 'fetch', '--quiet'],
-            cwd=repo_dir, capture_output=True, text=True, timeout=15,
+            cwd=REPO_DIR, capture_output=True, text=True, timeout=15,
         )
         local_sha = subprocess.run(
             ['git', 'rev-parse', 'HEAD'],
-            cwd=repo_dir, capture_output=True, text=True, timeout=5,
+            cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
         ).stdout.strip()
         remote_sha = subprocess.run(
             ['git', 'rev-parse', '@{u}'],
-            cwd=repo_dir, capture_output=True, text=True, timeout=5,
+            cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
         ).stdout.strip()
         if local_sha and remote_sha and local_sha != remote_sha:
             _log(log_fh, f'  INFO  update available — running git pull...')
             result = subprocess.run(
                 ['git', 'pull'],
-                cwd=repo_dir, capture_output=True, text=True, timeout=30,
+                cwd=REPO_DIR, capture_output=True, text=True, timeout=30,
             )
             for line in (result.stdout + result.stderr).strip().splitlines():
                 _log(log_fh, f'        {line}')
@@ -220,8 +222,7 @@ class Child:
 
 def main() -> int:
     cfg = _load_config()
-    default_log_dir = Path.home() / 'mesoview_logs'
-    log_dir = Path(cfg.get('log_dir', str(default_log_dir))).expanduser()
+    log_dir = Path(cfg.get('log_dir', str(DEFAULT_LOG_DIR))).expanduser()
 
     log_fh, log_date = _open_log(log_dir)
     _log(log_fh, f'starting — log: {log_fh.name}')

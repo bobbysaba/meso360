@@ -291,7 +291,7 @@ Before launching any child processes, `supervisor.py` runs a set of startup chec
 
 All four checks should show `PASS` before a field deployment. A `WARN` indicates something that needs attention — the system will still start, but the affected component may not function correctly.
 
-The fourth check (`software up to date`) runs `git fetch` and pulls any new commits before children start. If an update is pulled, the git output is logged in place of "up to date". A `WARN` on this check means the network was unreachable or the pull failed — children will still start on the current code.
+The fourth check (`software up to date`) runs `git fetch` and compares local vs upstream commit SHAs. If the worktree is clean and the remote is ahead, supervisor runs `git pull` before children start. If local uncommitted changes are present, supervisor logs a `WARN` and skips the automatic pull so local work is not overwritten. A `WARN` on this check can also mean the network was unreachable or the pull failed — children will still start on the current code.
 
 ---
 
@@ -474,8 +474,8 @@ In the bottom-right corner of the dashboard, a small indicator shows the git sta
 | State | Appearance | Meaning |
 |-------|------------|---------|
 | Up to date | Hidden | Nothing to do |
-| Update available | `↑ Update · <commit>` button | Remote repository has new commits. Click to run `git pull` and restart all components automatically. |
-| DEV badge | Orange `DEV` badge | Repo has uncommitted local changes. The Update button is hidden to avoid overwriting local work. |
+| Update available | `↑ Update · <commit>` button | Remote repository has new commits, the worktree is clean, and the update can be triggered from the host machine running mesoview. Click to run `git pull` and restart all components automatically. |
+| DEV badge | Orange `DEV` badge | Repo has uncommitted local changes. The Update button is hidden and the update path is blocked until those changes are committed or discarded. |
 
 ---
 
@@ -737,11 +737,11 @@ If the remote repository has new commits while the system is running, an `↑ Up
 3. If new commits were downloaded, signals the supervisor to restart **all three components** (mesoingest, mesoview, mesosync) within a few seconds
 4. The browser reconnects and reloads automatically
 
-This applies to fixes in any file — no SSH access required.
+The update endpoint only accepts requests from the host machine running `mesoview`; other devices on the LAN can view the dashboard but cannot trigger updates. If the repo has uncommitted local changes, the `DEV` badge is shown instead of the Update button and the update path is blocked until the worktree is clean.
 
 ### At Startup
 
-The supervisor automatically pulls any available updates during the preflight phase before children start. If you know an update has been pushed, simply restart the supervisor and it will pick it up.
+The supervisor checks for updates during the preflight phase before children start. If the repo is clean and the remote is ahead, it pulls automatically. If the repo has local uncommitted changes, it skips the pull and logs a warning instead. If you know an update has been pushed, simply restart the supervisor and it will pick it up, provided the worktree is clean.
 
 ### New Dependencies
 
