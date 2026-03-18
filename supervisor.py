@@ -41,6 +41,7 @@ from common import CONFIG_PATH, DEFAULT_DATA_DIR, DEFAULT_LOG_DIR, REPO_DIR, loa
 
 RESTART_DELAY_SEC = 2   # seconds to wait between terminate() and kill() during restarts
 UPDATE_EXIT_CODE  = 42  # mesoview exits with this code after a successful git pull to trigger a full restart
+TUNNEL_CHECK_INTERVAL_SEC = 30
 
 
 def _load_config() -> dict:
@@ -101,12 +102,50 @@ def _build_rtun_cmd(port: int) -> str:
     return (
         f'ssh -q -N '                        # -q = quiet (suppress banners), -N = no remote command (tunnel only)
         f'-R {port}:localhost:22 '           # reverse-tunnel: bind port on remote → forward to localhost:22 here
+        f'-o ExitOnForwardFailure=yes '      # exit immediately if the remote port cannot be bound
         f'-o TCPKeepAlive=yes '              # send TCP keepalives so the connection isn't dropped by firewalls/NAT
         f'-o ServerAliveCountMax=3 '         # disconnect after 3 missed keepalive responses
         f'-o ServerAliveInterval=10 '        # send a keepalive every 10 seconds
         f'-i {key_str} '                     # use the NSSL/BLISS RSA key for authentication
         f'clamps@remote.bliss.science'       # remote server that acts as the tunnel endpoint
     )
+
+
+def _probe_rtun(port: int, timeout_sec: int = 10) -> tuple[bool, str]:
+    """Return True when the remote port accepts a localhost TCP connection."""
+    key = Path.home() / '.ssh' / 'clamps_rsa'
+    cmd = [
+        'ssh',
+        '-q',
+        '-i',
+        str(key),
+        '-o',
+        'BatchMode=yes',
+        '-o',
+        f'ConnectTimeout={timeout_sec}',
+        'clamps@remote.bliss.science',
+        (
+            "("
+            "python3 -c "
+            f"\"import socket,sys; s=socket.create_connection(('127.0.0.1', {int(port)}), {timeout_sec}); s.close(); sys.exit(0)\""
+            " || "
+            "python -c "
+            f"\"import socket,sys; s=socket.create_connection(('127.0.0.1', {int(port)}), {timeout_sec}); s.close(); sys.exit(0)\""
+            ")"
+        ),
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec + 5,
+        )
+    except Exception as e:
+        return False, str(e)
+
+    detail = (result.stderr or result.stdout or '').strip()
+    return result.returncode == 0, detail or f'rc={result.returncode}'
 
 
 def _preflight(log_fh, cfg: dict) -> None:
@@ -277,6 +316,9 @@ def main() -> int:
     else:
         _log(log_fh, 'rtun_port not set in config — SSH tunnel disabled')
 
+    mesosync = next((child for child in children if child.name == 'mesosync'), None)
+    next_tunnel_check = time.monotonic() + TUNNEL_CHECK_INTERVAL_SEC
+
     stop = False  # set to True by the signal handler to break the main loop
     shutting_down = False
 
@@ -341,6 +383,17 @@ def main() -> int:
                         _log(log_fh, f'{child.name} exited with {rc}; restarting in {RESTART_DELAY_SEC}s')
                         time.sleep(RESTART_DELAY_SEC)
                         child.start(log_fh)
+
+            if mesosync and mesosync.poll() is None and rtun_port and time.monotonic() >= next_tunnel_check:
+                ok, detail = _probe_rtun(rtun_port)
+                if ok:
+                    _log(log_fh, f'mesosync probe passed on remote port {rtun_port}')
+                else:
+                    _log(log_fh, f'mesosync probe failed on remote port {rtun_port} ({detail}); restarting tunnel')
+                    _stop_children([mesosync], grace_sec=RESTART_DELAY_SEC)
+                    _log(log_fh, f'starting {mesosync.name}: {mesosync.cmd}')
+                    mesosync.start(log_fh)
+                next_tunnel_check = time.monotonic() + TUNNEL_CHECK_INTERVAL_SEC
 
             time.sleep(1)  # poll children once per second; low CPU overhead
 
