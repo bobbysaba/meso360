@@ -82,7 +82,8 @@ def _split_cmd(cmd: str) -> List[str]:
 
 
 def _default_cmds() -> tuple[str, str]:
-    py = shlex.quote(sys.executable)  # quote the Python path in case it contains spaces
+    # shlex.quote produces single-quoted strings which cmd.exe doesn't understand; use double quotes on Windows
+    py = f'"{sys.executable}"' if os.name == 'nt' else shlex.quote(sys.executable)
     # allow the caller to override commands via environment variables (useful for testing or venvs)
     ingest = os.environ.get('MESO_INGEST_CMD') or f'{py} mesoingest.py'
     viewer  = os.environ.get('MESO_VIEWER_CMD') or f'{py} mesoview.py'
@@ -244,6 +245,7 @@ class Child:
                 shell=True,
                 stdout=log_fh,
                 stderr=log_fh,
+                cwd=REPO_DIR,
                 creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0),
             )
         else:
@@ -251,6 +253,7 @@ class Child:
                 _split_cmd(cmd),
                 stdout=log_fh,
                 stderr=log_fh,  # stdout+stderr both go to the shared log file
+                cwd=REPO_DIR,
                 start_new_session=True,  # put each child in its own process group so shutdown can target the whole tree
             )
 

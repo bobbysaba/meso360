@@ -1,6 +1,9 @@
 {
+  "_path_format_note": "Use '~/' or Unix paths (e.g. '/home/user/data') on Mac/Linux. On Windows use 'C:/Users/YourName/data' — do NOT use Git Bash paths like '/c/Users/...' as Python won't resolve them correctly.",
   "data_dir":           "~/data/raw/mesonet",
+  "data_dir_windows":   "C:/Users/YourName/data/mesonet",
   "log_dir":            "~/mesoview_logs",
+  "log_dir_windows":    "C:/Users/YourName/logs",
   "logger_ip":          "192.168.4.6",
   "http_port":          8080,
   "mdns_hostname":      "mesoview",
