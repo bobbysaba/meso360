@@ -165,6 +165,7 @@ def _write_record(data_line):
 
 def main_loop():
     last_record_num = None  # tracks the last successfully written record number for gap detection
+    last_gps_time = None   # tracks the last written GPS time to detect GPS clock freeze
 
     while True:
         start = dt.datetime.now(timezone.utc)  # record loop start time to enforce 1 Hz cadence
@@ -207,7 +208,29 @@ def main_loop():
                 time.sleep(1 - elapsed)  # still maintain 1 Hz even when skipping
             continue
 
+        # Correct records where the GPS clock froze — same time as the last written record means
+        # the GPS didn't advance for one tick.  The met fields are a real unique observation, so
+        # we assign it the inferred time (last GPS time + 1 s) rather than discarding it.
+        fields = data_line.split(',')
+        gps_time = fields[10]  # index 10 is gps_time in the output CSV (matches HEADER)
+        if last_gps_time is not None and gps_time == last_gps_time and gps_time.lower() != 'nan':
+            gps_date = fields[9]  # DDMMYY
+            try:
+                frozen_dt = dt.datetime.strptime(gps_date + gps_time, '%d%m%y%H%M%S').replace(tzinfo=timezone.utc)
+                corrected_dt = frozen_dt + dt.timedelta(seconds=1)
+                fields[9]  = corrected_dt.strftime('%d%m%y')  # gps_date may roll over at midnight
+                fields[10] = corrected_dt.strftime('%H%M%S')
+                data_line  = ','.join(fields)
+                _log(f'WARNING: GPS clock froze at {gps_time}; corrected to {fields[10]}')
+            except ValueError:
+                _log(f'WARNING: GPS clock froze at {gps_time} but could not correct time; skipping record')
+                elapsed = (dt.datetime.now(timezone.utc) - start).total_seconds()
+                if elapsed < 1:
+                    time.sleep(1 - elapsed)
+                continue
+
         _write_record(data_line)
+        last_gps_time = fields[10]
 
         # sleep for the remainder of the second to maintain ~1 Hz output rate
         elapsed = (dt.datetime.now(timezone.utc) - start).total_seconds()
