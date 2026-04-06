@@ -196,6 +196,72 @@ python mesoview.py --test
 
 ---
 
+## Desktop icon / launcher
+
+The repo includes ready-made launcher scripts so you can start supervisor with a double-click. The scripts search common conda install locations automatically — no path editing needed on most machines.
+
+---
+
+### Windows
+
+`launch_supervisor.bat` is already in the repo. Create a desktop shortcut that points to it by running this in **PowerShell** (replace `YOUR_USER` with your Windows username and `C:\path\to\meso360` with the actual repo path):
+
+```powershell
+$ws = New-Object -ComObject WScript.Shell
+$sc = $ws.CreateShortcut("$env:USERPROFILE\Desktop\Supervisor.lnk")
+$sc.TargetPath     = "C:\path\to\meso360\launch_supervisor.bat"
+$sc.WorkingDirectory = "C:\path\to\meso360"
+$sc.Description    = "Launch meso360 supervisor"
+$sc.Save()
+```
+
+Double-click **Supervisor** on the desktop to launch. The terminal window stays open so you can see output; close it (or press Ctrl-C) to stop the supervisor.
+
+---
+
+### macOS
+
+`launch_supervisor.command` is already in the repo. Make it executable once, then create a Finder alias on the Desktop:
+
+```bash
+# one-time setup
+chmod +x /path/to/meso360/launch_supervisor.command
+
+# create Desktop alias (replace the path)
+osascript -e 'tell app "Finder" to make alias file to POSIX file "/path/to/meso360/launch_supervisor.command" at desktop'
+```
+
+Double-click **launch_supervisor** on the Desktop. Terminal opens, activates the `meso360` env, and starts supervisor. Close the Terminal window (or press Ctrl-C) to stop.
+
+> **Gatekeeper prompt:** the first time macOS may ask you to confirm opening a downloaded script. Click *Open*.
+
+---
+
+### Linux
+
+`launch_supervisor.command` is already in the repo. Make it executable once, then create a `.desktop` entry on the Desktop:
+
+```bash
+# one-time setup
+chmod +x /path/to/meso360/launch_supervisor.command
+
+# create .desktop launcher (replace the path)
+cat > ~/Desktop/Supervisor.desktop << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=Supervisor
+Comment=Launch meso360 supervisor
+Exec=/path/to/meso360/launch_supervisor.command
+Terminal=true
+EOF
+
+chmod +x ~/Desktop/Supervisor.desktop
+```
+
+Double-click **Supervisor** on the desktop. Your desktop environment will open a terminal, activate the `meso360` env, and start supervisor.
+
+---
+
 ## Run on startup
 
 The goal is to have `supervisor.py` launch automatically when the host machine boots, using the Python executable from your environment. Find that path first:
@@ -335,6 +401,8 @@ meso360/
 ├── mesoingest.py          # fetches data from the datalogger at 1 Hz; writes daily .txt files
 ├── mesoview.py            # Flask SSE server + web dashboard
 ├── meso360.config.example.json   # copy to meso360.config.json and edit
+├── launch_supervisor.bat     # Windows double-click launcher (searches for conda automatically)
+├── launch_supervisor.command # macOS / Linux double-click launcher (searches for conda automatically)
 ├── environment.yml        # conda environment spec
 ├── requirements.txt       # pip fallback
 ├── templates/
