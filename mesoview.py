@@ -345,7 +345,7 @@ def index():
 @app.route('/initial')
 def initial():
     """Return the last 2 hours of records as JSON for chart initialization."""
-    empty = {k: [] for k in ('ts', 't', 'td', 'wspd', 'wdir', 'pressure', 'compass_dir', 'lat', 'lon')}
+    empty = {k: [] for k in ('ts', 't', 'td', 'wspd', 'wdir', 'pressure', 'compass_dir', 'lat', 'lon', 'rh')}
     if TEST_MODE:
         # In test mode, preload the 2 hours before the replay start point
         with open(TEST_FILE) as fh:

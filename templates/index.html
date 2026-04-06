@@ -1721,7 +1721,7 @@ requestAnimationFrame(() => {
     .then(r => r.json())
     .then(d => {
       // Rebuild buffer with gap detection
-      buf = { ts: [], t: [], td: [], wspd: [], wdir: [], pressure: [], compass_dir: [], lat: [], lon: [] };
+      buf = { ts: [], t: [], td: [], wspd: [], wdir: [], pressure: [], compass_dir: [], lat: [], lon: [], rh: [] };
       lastRealTs = null;
       gapCountToday = 0;
       gapDayStart = null;
