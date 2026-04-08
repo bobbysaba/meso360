@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MESO360 CONTROL PANEL</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #1e1e2e;
+      --surface:  #181825;
+      --border:   #313244;
+      --muted:    #45475a;
+      --text:     #cdd6f4;
+      --subtext:  #c5cbe5;
+      --green:    #a6e3a1;
+      --yellow:   #f9e2af;
+      --red:      #f38ba8;
+      --blue:     #89b4fa;
+      --orange:   #fab387;
+      --purple:   #cba6f7;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-monospace, 'Cascadia Code', monospace;
+      font-size: 14px;
+      min-height: 100vh;
+      padding: 0;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    h1 {
+      font-size: 0.9rem;
+      color: #cfe2ff;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    /* ── Supervisor heartbeat ────────────────────────────────── */
+    #heartbeat {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.75rem;
+      color: var(--subtext);
+    }
+    #heartbeat .status-dot { width: 8px; height: 8px; }
+    #heartbeat.ok .status-dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    #heartbeat.ok .hb-label { color: var(--green); }
+    #heartbeat.lost .status-dot { background: var(--red); box-shadow: 0 0 6px var(--red); }
+    #heartbeat.lost .hb-label { color: var(--red); }
+
+    /* ── Version / update button ─────────────────────────────── */
+    #version-btn {
+      background: var(--muted);
+      color: var(--subtext);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 3px 10px;
+      font-family: inherit;
+      font-size: 0.72rem;
+      cursor: default;
+      letter-spacing: 0.03em;
+    }
+    #version-btn.update-available {
+      color: var(--yellow);
+      border-color: var(--yellow);
+      cursor: pointer;
+    }
+    #version-btn.update-available:hover {
+      background: #3e3020;
+    }
+    #version-btn.dev {
+      color: var(--orange);
+      border-color: var(--orange);
+    }
+    #version-btn.updating {
+      color: var(--subtext);
+      cursor: wait;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .section-title {
+      font-size: 0.75rem;
+      color: var(--subtext);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    /* ── Component cards ─────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 18px;
+    }
+
+    .component {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .component:last-child { border-bottom: none; }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .status-dot.running  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .status-dot.recent   { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+    .status-dot.exited   { background: var(--red); box-shadow: 0 0 6px var(--red); }
+    .status-dot.stopped  { background: var(--red); }
+    .status-dot.disabled { background: var(--muted); }
+
+    .comp-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .comp-name {
+      font-weight: bold;
+      font-size: 0.85rem;
+    }
+
+    .comp-meta {
+      font-size: 0.75rem;
+      color: var(--subtext);
+      margin-top: 2px;
+    }
+
+    .comp-status {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      min-width: 80px;
+      text-align: right;
+    }
+
+    .comp-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .btn {
+      background: var(--muted);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 10px;
+      font-family: inherit;
+      font-size: 0.7rem;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .btn:hover { background: var(--border); }
+    .btn:active { transform: scale(0.97); }
+    .btn.danger { color: var(--red); }
+    .btn.danger:hover { background: #3e2030; }
+
+    /* ── Legend ───────────────────────────────────────────────── */
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 14px;
+      padding-top: 10px;
+      margin-top: 10px;
+      border-top: 1px solid var(--border);
+      font-size: 0.7rem;
+      color: var(--subtext);
+    }
+    .legend > span {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .legend .status-dot {
+      width: 8px;
+      height: 8px;
+    }
+
+    /* ── Quick links ─────────────────────────────────────────── */
+    .links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .link-btn {
+      background: var(--muted);
+      color: var(--blue);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 16px;
+      font-family: inherit;
+      font-size: 0.8rem;
+      text-decoration: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .link-btn:hover { background: var(--border); color: #b4d0fb; }
+
+    /* ── Config table ────────────────────────────────────────── */
+    .config-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 4px 16px;
+      font-size: 0.8rem;
+    }
+    .config-grid .label {
+      color: var(--subtext);
+      text-align: right;
+    }
+    .config-grid .value {
+      color: var(--text);
+    }
+
+    /* ── Log viewer ──────────────────────────────────────────── */
+    #log-viewer {
+      background: #11111b;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 0.72rem;
+      line-height: 1.5;
+      max-height: 300px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: var(--subtext);
+    }
+
+    #log-viewer .log-line {
+      display: block;
+    }
+
+    /* ── Update banner ───────────────────────────────────────── */
+    #update-banner {
+      display: none;
+      background: #3e2050;
+      border: 1px solid var(--purple);
+      border-radius: 6px;
+      padding: 10px 16px;
+      font-size: 0.8rem;
+      color: var(--purple);
+    }
+    #update-banner.show { display: block; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MESO360 CONTROL PANEL</h1>
+    <div class="header-right">
+      <div id="heartbeat" class="ok">
+        <div class="status-dot"></div>
+        <span class="hb-label">supervisor connected</span>
+      </div>
+      <button id="version-btn" onclick="handleUpdateClick()" disabled>...</button>
+    </div>
+  </header>
+
+  <div class="container">
+    <!-- Update banner -->
+    <div id="update-banner">
+      Supervisor code was updated — restart meso360 to apply changes.
+    </div>
+
+    <!-- Components -->
+    <div>
+      <div class="section-title">Components</div>
+      <div class="card">
+        <div id="components-list">
+          <!-- Populated by JS -->
+        </div>
+        <div class="legend">
+          <span><span class="status-dot running"></span> Running</span>
+          <span><span class="status-dot recent"></span> Recently restarted</span>
+          <span><span class="status-dot exited"></span> Crashed / exited</span>
+          <span><span class="status-dot disabled"></span> Disabled</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Links -->
+    <div>
+      <div class="section-title">Quick Links</div>
+      <div class="links" id="quick-links">
+        <a class="link-btn" href="/view" target="_blank">Mesoview Dashboard</a>
+        <a class="link-btn" id="link-rack" href="#" target="_blank">Datalogger Rack</a>
+        <a class="link-btn" id="link-log" href="#" onclick="scrollToLog(); return false;">Today's Log</a>
+      </div>
+    </div>
+
+    <!-- Config Summary -->
+    <div>
+      <div class="section-title">Config</div>
+      <div class="card">
+        <div class="config-grid" id="config-grid">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Log Viewer -->
+    <div>
+      <div class="section-title">Recent Log</div>
+      <div id="log-viewer"></div>
+    </div>
+  </div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────
+let statusData = null;
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function formatUptime(seconds) {
+  if (seconds == null) return '';
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+function dotClass(comp) {
+  if (!comp.enabled) return 'disabled';
+  if (comp.status === 'running' && comp.uptime != null && comp.uptime < 30) return 'recent';
+  return comp.status;  // running, exited, stopped
+}
+
+// ── Render components ─────────────────────────────────────────────────────
+function renderComponents(components) {
+  const container = document.getElementById('components-list');
+  container.innerHTML = '';
+
+  // Mesoview (in-process, always running) — shown first
+  if (statusData && statusData.cache) {
+    const div = document.createElement('div');
+    div.className = 'component';
+    div.innerHTML = `
+      <div class="status-dot running"></div>
+      <div class="comp-info">
+        <div class="comp-name">mesoview</div>
+        <div class="comp-meta">cache: ${statusData.cache.points.toLocaleString()} pts  file: ${statusData.cache.current_file}</div>
+      </div>
+      <div class="comp-status">running</div>
+      <div class="comp-actions"></div>
+    `;
+    container.appendChild(div);
+  }
+
+  // Child processes (mesoingest, mesosync)
+  for (const c of components) {
+    const div = document.createElement('div');
+    div.className = 'component';
+    const uptimeStr = formatUptime(c.uptime);
+    const metaParts = [];
+    if (c.restart_count > 0) metaParts.push(`restarts: ${c.restart_count}`);
+    if (c.last_exit_code != null) metaParts.push(`last exit: ${c.last_exit_code}`);
+    const metaStr = metaParts.join('  ');
+
+    // Not configured — show grayed out with no controls
+    if (!c.configured) {
+      div.innerHTML = `
+        <div class="status-dot disabled"></div>
+        <div class="comp-info">
+          <div class="comp-name">${c.name}</div>
+          <div class="comp-meta">not configured</div>
+        </div>
+        <div class="comp-status">-</div>
+        <div class="comp-actions"></div>
+      `;
+      container.appendChild(div);
+      continue;
+    }
+
+    // Toggle: enabled components can be disabled, disabled ones can be enabled
+    const toggleAction = c.enabled ? 'disable' : 'enable';
+    const toggleLabel  = c.enabled ? 'Disable' : 'Enable';
+    const toggleClass  = c.enabled ? 'btn danger' : 'btn';
+
+    div.innerHTML = `
+      <div class="status-dot ${dotClass(c)}"></div>
+      <div class="comp-info">
+        <div class="comp-name">${c.name}</div>
+        <div class="comp-meta">${metaStr}</div>
+      </div>
+      <div class="comp-status">${c.status}${uptimeStr ? '  ' + uptimeStr : ''}</div>
+      <div class="comp-actions">
+        <button class="${toggleClass}" onclick="doControl('${c.name}','${toggleAction}')">${toggleLabel}</button>
+        ${c.enabled ? `<button class="btn" onclick="doControl('${c.name}','restart')">Restart</button>` : ''}
+      </div>
+    `;
+    container.appendChild(div);
+  }
+}
+
+// ── Render config ─────────────────────────────────────────────────────────
+function renderConfig(config) {
+  const grid = document.getElementById('config-grid');
+  grid.innerHTML = '';
+  const entries = [
+    ['Logger IP', config.logger_ip],
+    ['HTTP Port', config.http_port],
+    ['Data Dir', config.data_dir],
+    ['Log Dir', config.log_dir],
+    ['Tunnel Port', config.rtun_port || 'disabled'],
+    ['mDNS', config.mdns_hostname + '.local'],
+  ];
+  for (const [label, value] of entries) {
+    grid.innerHTML += `<span class="label">${label}:</span><span class="value">${value}</span>`;
+  }
+
+  // Update quick links
+  document.getElementById('link-rack').href = `http://${config.logger_ip}`;
+}
+
+// ── Heartbeat ─────────────────────────────────────────────────────────────
+let consecutiveFailures = 0;
+
+function setHeartbeat(ok) {
+  const hb = document.getElementById('heartbeat');
+  const label = hb.querySelector('.hb-label');
+  if (ok) {
+    consecutiveFailures = 0;
+    hb.className = 'ok';
+    label.textContent = 'supervisor connected';
+  } else {
+    consecutiveFailures++;
+    if (consecutiveFailures >= 2) {  // only show lost after 2 consecutive failures (~4s)
+      hb.className = 'lost';
+      label.textContent = 'supervisor disconnected';
+    }
+  }
+}
+
+// ── API calls ─────────────────────────────────────────────────────────────
+async function fetchStatus() {
+  try {
+    const resp = await fetch('/api/status');
+    statusData = await resp.json();
+    renderComponents(statusData.components);
+    renderConfig(statusData.config);
+    setHeartbeat(true);
+  } catch (e) {
+    setHeartbeat(false);
+  }
+}
+
+async function doControl(component, action) {
+  try {
+    await fetch('/api/control', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({component, action}),
+    });
+    await fetchStatus();
+  } catch (e) {
+    console.error('control failed:', e);
+  }
+}
+
+// ── Version / Update ─────────────────────────────────────────────────────
+let versionData = null;
+
+async function fetchVersion() {
+  try {
+    const resp = await fetch('/version');
+    versionData = await resp.json();
+    const btn = document.getElementById('version-btn');
+    btn.disabled = false;
+
+    if (versionData.dirty) {
+      btn.textContent = 'dev';
+      btn.className = 'dev';
+      btn.title = 'Local changes detected — commit or discard before updating';
+    } else if (versionData.update_available) {
+      btn.textContent = 'update available';
+      btn.className = 'update-available';
+      btn.title = 'Click to pull latest changes and restart';
+    } else {
+      btn.textContent = 'up to date';
+      btn.className = '';
+      btn.title = 'Software is up to date';
+    }
+  } catch (e) {}
+}
+
+async function handleUpdateClick() {
+  if (!versionData || !versionData.update_available) return;
+
+  const btn = document.getElementById('version-btn');
+  btn.textContent = 'updating...';
+  btn.className = 'updating';
+  btn.disabled = true;
+
+  try {
+    const resp = await fetch('/update', { method: 'POST' });
+    const data = await resp.json();
+
+    if (!data.ok) {
+      btn.textContent = 'update failed';
+      btn.className = 'dev';
+      btn.title = data.output || 'Unknown error';
+      setTimeout(fetchVersion, 5000);
+      return;
+    }
+
+    if (data.supervisor_changed) {
+      document.getElementById('update-banner').classList.add('show');
+    }
+
+    // Children are restarting — poll until supervisor responds, then reload
+    btn.textContent = 'restarting...';
+    const pollUntilReady = async () => {
+      for (let i = 0; i < 30; i++) {  // try for up to 30s
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+          const check = await fetch('/api/status');
+          if (check.ok) {
+            location.reload();
+            return;
+          }
+        } catch (e) {}  // supervisor still restarting
+      }
+      // If we get here, supervisor didn't come back — reload anyway
+      location.reload();
+    };
+    pollUntilReady();
+  } catch (e) {
+    btn.textContent = 'update failed';
+    btn.className = 'dev';
+    btn.title = 'Network error during update';
+    setTimeout(fetchVersion, 5000);
+  }
+}
+
+// ── Log viewer (SSE) ─────────────────────────────────────────────────────
+function initLogStream() {
+  const viewer = document.getElementById('log-viewer');
+  const MAX_LINES = 200;
+
+  const es = new EventSource('/api/log/stream');
+  es.addEventListener('log', (e) => {
+    const entry = JSON.parse(e.data);
+    const span = document.createElement('span');
+    span.className = 'log-line';
+    span.textContent = entry.line;
+    viewer.appendChild(span);
+
+    // Trim old lines
+    while (viewer.children.length > MAX_LINES) {
+      viewer.removeChild(viewer.firstChild);
+    }
+
+    // Auto-scroll if near bottom
+    const atBottom = viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight < 60;
+    if (atBottom) {
+      viewer.scrollTop = viewer.scrollHeight;
+    }
+  });
+
+  es.onerror = () => {
+    // EventSource auto-reconnects
+  };
+}
+
+function scrollToLog() {
+  document.getElementById('log-viewer').scrollIntoView({behavior: 'smooth'});
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+fetchStatus();
+fetchVersion();
+initLogStream();
+
+// Poll status every 2 seconds, version every 60 seconds
+setInterval(fetchStatus, 2000);
+setInterval(fetchVersion, 60000);
+</script>
+</body>
+</html>

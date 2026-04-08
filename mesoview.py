@@ -1,168 +1,71 @@
 #!/usr/bin/env python3
 """
-mesoview — real-time web dashboard for Mobile Mesonet data.
-Serves three interactive uPlot charts over SSE.
+mesoview — Flask Blueprint for the real-time data dashboard.
 
-Usage:  python mesoview.py           # live mode
-        python mesoview.py --test    # replay test_data/test.txt at 1 Hz
-Access: http://<host-ip>:8080  (any device on the network)
+Registered by supervisor.py at /view. Not runnable standalone.
 """
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Blueprint, Response, jsonify, render_template
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-import math
-import argparse, csv, time, json, socket, urllib.request, webbrowser
-import subprocess, os, sys, threading, atexit
-import ipaddress
-from collections import deque  # used for the fixed-size in-memory data cache
+import math, csv, time, json, threading
 
-from common import DEFAULT_DATA_DIR, HEADER, REPO_DIR, load_config
+from common import DEFAULT_DATA_DIR, HEADER, load_config
 
-# zeroconf enables http://mesoview.local discovery on the LAN without knowing the host IP
-# it's optional — if not installed, mDNS is skipped and the numeric IP still works
-try:
-    from zeroconf import ServiceInfo, Zeroconf
-except Exception:
-    ServiceInfo = None
-    Zeroconf = None
+mesoview_bp = Blueprint('mesoview', __name__, template_folder='templates')
 
-parser = argparse.ArgumentParser(
-    prog='mesoview',
-    description='Real-time web dashboard for NSSL Mobile Mesonet data.',
-)
-parser.add_argument('--test', action='store_true', help='Run in test/replay mode')
-parser.add_argument('--test-start-offset', type=int, default=0,
-                    help='(test mode) seconds after first data point to start replay')
-parser.add_argument('--no-browser', action='store_true',
-                    help='Skip opening a browser tab on startup (used by supervisor on restarts)')
-args, _ = parser.parse_known_args()
-TEST_MODE = args.test
-TEST_START_OFFSET = max(0, args.test_start_offset or 0)  # clamp to 0 so a negative offset is treated as 0
-NO_BROWSER = args.no_browser
+# Set by supervisor before registering this blueprint.
+TEST_MODE: bool = False
+TEST_FILE = Path(__file__).parent / 'test_data' / 'test.txt'
 
-TEST_FILE = Path(__file__).parent / 'test_data' / 'test.txt'  # sample data file used in --test mode
+_CFG = load_config()
+DATA_DIR = Path(_CFG.get('data_dir', str(DEFAULT_DATA_DIR))).expanduser()
 
-app = Flask(__name__)
-
-# ── Version cache (populated by background thread) ───────────────────────────
-# Storing version info in a dict avoids blocking HTTP requests on slow git operations
-_ver_cache: dict = {'commit': None, 'dirty': False, 'update_available': False}
-_ver_lock = threading.Lock()  # protects _ver_cache from concurrent reads/writes across threads
-
-def _version_worker():
-    """Fetch git status/remote once immediately, then every 5 minutes."""
-    while True:
-        try:
-            # get the short commit hash shown in the dashboard header
-            commit = subprocess.run(
-                ['git', 'rev-parse', '--short', 'HEAD'],
-                cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
-            ).stdout.strip()
-            # porcelain output is non-empty if there are any uncommitted changes
-            dirty = bool(subprocess.run(
-                ['git', 'status', '--porcelain'],
-                cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
-            ).stdout.strip())
-            # fetch from remote so we can compare local vs remote SHA
-            subprocess.run(
-                ['git', 'fetch', '--quiet'],
-                cwd=REPO_DIR, capture_output=True, text=True, timeout=15,
-            )
-            local_sha = subprocess.run(
-                ['git', 'rev-parse', 'HEAD'],
-                cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
-            ).stdout.strip()
-            # @{u} resolves to the upstream (remote tracking) branch of the current branch
-            remote_sha = subprocess.run(
-                ['git', 'rev-parse', '@{u}'],
-                cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
-            ).stdout.strip()
-            # an update is available if remote SHA exists and differs from local SHA
-            update_available = bool(local_sha and remote_sha and local_sha != remote_sha)
-            with _ver_lock:
-                _ver_cache.update(commit=commit, dirty=dirty, update_available=update_available)
-        except Exception as e:
-            _log(f'WARNING: version check failed: {e}')
-        time.sleep(300)  # re-check every 5 minutes; no need to poll faster for a version indicator
-
-threading.Thread(target=_version_worker, daemon=True).start()  # daemon=True so it exits when the main process exits
-
-# ── Config ───────────────────────────────────────────────────────────────────
-def _log(msg):
-    from datetime import datetime, timezone
-    ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-    print(f'[{ts}] [mesoview] {msg}', flush=True)  # flush=True ensures lines appear immediately in the supervisor log
-
-def _load_config():
-    return load_config(_log)
-
-_CFG = _load_config()  # loaded once at startup; restart viewer to pick up config changes
-
-# Update DATA_DIR to match DATA_DIR in mesoingest.py
-DATA_DIR      = Path(_CFG.get('data_dir', str(DEFAULT_DATA_DIR))).expanduser()
-UPLOT_VERSION = '1.6.31'     # pinned version of the uPlot charting library; update here to upgrade
-HTTP_PORT     = int(_CFG.get('http_port', 8080))
-MDNS_HOSTNAME = _CFG.get('mdns_hostname', 'mesoview')  # advertised as <hostname>.local on the LAN
-
-# Column indices — derived from HEADER so they can't drift if columns are added/removed.
-_HDR = HEADER.split(',')  # intermediate list used to look up column positions by name
+_HDR = HEADER.split(',')
 IDX = {
-    'wspd':        _HDR.index('sfc_wspd'),      # surface wind speed
-    'wdir':        _HDR.index('sfc_wdir'),      # surface wind direction
-    't':           _HDR.index('t_fast'),        # fast-response temperature
-    'td':          _HDR.index('dewpoint'),      # dewpoint temperature
-    'pressure':    _HDR.index('pressure'),      # station pressure
-    'compass_dir': _HDR.index('compass_dir'),   # vehicle heading from compass
-    'date':        _HDR.index('gps_date'),      # GPS date (DDMMYY format)
-    'time_':       _HDR.index('gps_time'),      # GPS time (HHMMSS format); trailing underscore avoids shadowing Python's 'time'
-    'lat':         _HDR.index('lat'),           # GPS latitude
-    'lon':         _HDR.index('lon'),           # GPS longitude
-    'rh':          _HDR.index('der_rh'),        # derived relative humidity
+    'wspd':        _HDR.index('sfc_wspd'),
+    'wdir':        _HDR.index('sfc_wdir'),
+    't':           _HDR.index('t_fast'),
+    'td':          _HDR.index('dewpoint'),
+    'pressure':    _HDR.index('pressure'),
+    'compass_dir': _HDR.index('compass_dir'),
+    'date':        _HDR.index('gps_date'),
+    'time_':       _HDR.index('gps_time'),
+    'lat':         _HDR.index('lat'),
+    'lon':         _HDR.index('lon'),
+    'rh':          _HDR.index('der_rh'),
 }
 
-# ── uPlot assets (auto-downloaded once for offline field use) ─────────────────
-STATIC = Path(__file__).parent / 'static'
+# ── In-memory data cache ──────────────────────────────────────────────────────
+_data_buf: list = []
+_data_lock = threading.Lock()
+_data_cond = threading.Condition(_data_lock)
+_data_seq  = 0
+_MAX_BUF   = 7200  # 2 hours at 1 Hz
 
-def ensure_uplot():
-    STATIC.mkdir(exist_ok=True)
-    # assets are served from the local static directory so the dashboard works with no internet connection
-    base = f'https://unpkg.com/uplot@{UPLOT_VERSION}/dist'
-    assets = [
-        ('uplot.min.js',  f'{base}/uPlot.iife.min.js'),
-        ('uplot.min.css', f'{base}/uPlot.min.css'),
-    ]
-    for fname, url in assets:
-        dst = STATIC / fname
-        if not dst.exists():  # only download if the file isn't already cached locally
-            try:
-                _log(f'Downloading {fname}...')
-                with urllib.request.urlopen(url, timeout=10) as resp:
-                    dst.write_bytes(resp.read())
-                _log(f'Saved {dst}')
-            except Exception as e:
-                _log(f'Warning: could not fetch {fname}: {e}')  # non-fatal; dashboard will load from CDN instead
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def today_file():
-    # returns the path to today's data file based on UTC date, matching the naming convention in mesoingest.py
+def _log(msg: str) -> None:
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    print(f'[{ts}] [mesoview] {msg}', flush=True)
+
+
+def today_file() -> Path:
     return DATA_DIR / f"{datetime.now(timezone.utc).strftime('%Y%m%d')}.txt"
 
-def parse_row(row):
-    """Parse a CSV row into a data point dict, or return None on failure."""
+
+def parse_row(row: list):
     if len(row) <= max(IDX.values()):
-        return None  # row is too short to contain all expected columns; skip it
+        return None
     try:
-        # combine GPS date (DDMMYY) and time (HHMMSS) into a single UTC unix timestamp
         ts = datetime.strptime(
             row[IDX['date']] + row[IDX['time_']], '%d%m%y%H%M%S'
         ).replace(tzinfo=timezone.utc).timestamp()
 
         def f(idx):
-            # helper: convert a single column to float, returning None if missing or non-finite
             try:
                 v = float(row[idx])
-                return v if math.isfinite(v) else None  # treat inf/nan as missing data
+                return v if math.isfinite(v) else None
             except (ValueError, IndexError):
                 return None
 
@@ -176,240 +79,137 @@ def parse_row(row):
         lon         = f(IDX['lon'])
         rh          = f(IDX['rh'])
 
-        # skip rows where all primary met fields are missing (e.g. sensor dropout or header line)
         if all(v is None for v in (t, td, wspd, wdir, pressure, compass_dir)):
             return None
 
-        return dict(
-            ts          = ts,
-            t           = t,
-            td          = td,
-            wspd        = wspd,
-            wdir        = wdir,
-            pressure    = pressure,
-            compass_dir = compass_dir,
-            lat         = lat,
-            lon         = lon,
-            rh          = rh,
-        )
-    except (ValueError, IndexError) as e:
-        _log(f'WARNING: parse_row failed: {e}')  # log so repeated failures are visible in the supervisor log
+        return dict(ts=ts, t=t, td=td, wspd=wspd, wdir=wdir,
+                    pressure=pressure, compass_dir=compass_dir,
+                    lat=lat, lon=lon, rh=rh)
+    except (ValueError, IndexError):
         return None
-
-def get_local_ip():
-    """Best-effort LAN IP discovery (avoids 127.0.0.1 where possible)."""
-    s = None
-    try:
-        # open a UDP socket to a public address — no data is sent, but the OS picks the outbound interface
-        # this gives us the LAN IP that other devices would use to reach this machine
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(('8.8.8.8', 80))
-        return s.getsockname()[0]
-    except Exception:
-        try:
-            return socket.gethostbyname(socket.gethostname())  # fallback: resolve our own hostname
-        except Exception:
-            return '0.0.0.0'  # last resort: bind to all interfaces and let the user find the address
-    finally:
-        if s is not None:
-            try:
-                s.close()
-            except Exception:
-                pass
-
-def advertise_mdns(hostname='mesoview', port=8080):
-    """Advertise http://<hostname>.local:<port> via mDNS/Bonjour."""
-    if Zeroconf is None or ServiceInfo is None:
-        _log('mDNS: zeroconf not installed; skipping .local advertisement')
-        return None
-
-    ip = get_local_ip()
-    service_type = '_http._tcp.local.'                # standard mDNS service type for HTTP
-    instance     = f'{hostname}._http._tcp.local.'    # full instance name visible to browsers/devices
-    server       = f'{hostname}.local.'               # the hostname that resolves to this machine on the LAN
-    info = ServiceInfo(
-        service_type,
-        instance,
-        addresses=[socket.inet_aton(ip)],  # inet_aton converts dotted-decimal IP to packed bytes
-        port=port,
-        server=server,
-        properties={'path': '/'},          # advertise the root path so browsers can navigate directly
-    )
-
-    zc = Zeroconf()
-    try:
-        zc.register_service(info)  # broadcast the service on the LAN
-    except Exception as e:
-        _log(f'mDNS: failed to register service: {e}')
-        try:
-            zc.close()
-        except Exception:
-            pass
-        return None
-
-    def _cleanup():
-        # unregister the mDNS service when the viewer exits so the name doesn't linger on the LAN
-        try:
-            zc.unregister_service(info)
-            zc.close()
-        except Exception:
-            pass
-
-    atexit.register(_cleanup)  # atexit runs _cleanup automatically on normal process exit
-    _log(f'mDNS: advertised http://{hostname}.local:{port} -> {ip}:{port}')
-    return zc
-
-# ── In-memory data cache ──────────────────────────────────────────────────────
-# Holds up to 2 hours of parsed points so /initial never reads from disk.
-_data_buf: deque = deque(maxlen=7200)  # 7200 = 2 hours at 1 Hz; oldest points are auto-dropped when full
-_data_lock = threading.Lock()          # guards _data_buf against concurrent access from Flask threads and _cache_worker
-_data_cond = threading.Condition(_data_lock)
-_data_seq = 0
 
 
 def _append_point(p) -> None:
     global _data_seq
     with _data_cond:
         _data_buf.append(p)
+        if len(_data_buf) > _MAX_BUF:
+            del _data_buf[0]
         _data_seq += 1
         _data_cond.notify_all()
 
-def _cache_worker():
-    """Background thread: pre-populates _data_buf from existing files on
-    startup, then tails the current daily file and appends new points as
-    ingest writes them."""
-    # ── Startup: load up to 2 hours of history so /initial has data immediately ──
+
+def start_cache_worker() -> None:
+    """Called by supervisor after blueprint registration."""
+    threading.Thread(target=_cache_worker, daemon=True).start()
+
+
+def _cache_worker() -> None:
+    if TEST_MODE:
+        _run_test_cache()
+    else:
+        _run_live_cache()
+
+
+def _run_test_cache() -> None:
+    """Load test file into cache then replay it in a loop at 1 Hz."""
+    data = []
+    with open(TEST_FILE) as fh:
+        reader = csv.reader(fh)
+        next(reader, None)
+        for row in reader:
+            p = parse_row(row)
+            if p:
+                data.append(p)
+    if not data:
+        _log('WARNING: test file empty')
+        return
+    # Pre-load history (first 2 hours of test data)
+    cutoff = data[0]['ts'] + 2 * 60 * 60
+    for p in data:
+        if p['ts'] <= cutoff:
+            _append_point(p)
+    _log(f'TEST cache: preloaded {len(_data_buf)} points, replaying at 1 Hz')
+    while True:
+        for p in data:
+            _append_point(p)
+            time.sleep(1)
+
+
+def _run_live_cache() -> None:
     now    = datetime.now(timezone.utc)
-    cutoff = now.timestamp() - 2 * 60 * 60  # unix timestamp 2 hours ago
+    cutoff = now.timestamp() - 2 * 60 * 60
     yesterday = DATA_DIR / f"{(now - timedelta(days=1)).strftime('%Y%m%d')}.txt"
-    for f in (yesterday, today_file()):  # check yesterday first in case we're near midnight
+    for f in (yesterday, today_file()):
         if f.exists():
             with open(f) as fh:
                 reader = csv.reader(fh)
-                next(reader, None)  # skip header row
+                next(reader, None)
                 for row in reader:
                     p = parse_row(row)
-                    if p and p['ts'] >= cutoff:  # only load points within the 2-hour window
+                    if p and p['ts'] >= cutoff:
                         _append_point(p)
 
-    # ── Tail loop: append new points as ingest writes them ───────────────────
     path = today_file()
     _wait_start = time.monotonic()
-    _last_warn = -60.0  # ensure we log on the first iteration if the file is missing
-    while not path.exists():  # wait for ingest to create today's file before starting to tail
+    _last_warn  = -60.0
+    while not path.exists():
         elapsed = time.monotonic() - _wait_start
         if elapsed - _last_warn >= 60:
             _log(f'WARNING: still waiting for data file {path} ({int(elapsed)}s elapsed)')
             _last_warn = elapsed
         time.sleep(2)
         path = today_file()
-    pos = path.stat().st_size  # start at the end of the file so we only pick up new lines
+    pos = path.stat().st_size
 
     while True:
         new_path = today_file()
         if new_path != path:
-            # date has rolled over — switch to the new file and read from the top (after header)
             path = new_path
             pos  = 0
-
         if path.exists():
             with open(path) as fh:
-                # detect truncation: if our saved position is past EOF, the file was recreated
-                # (e.g. ingest restarted) — reset to just after the header to avoid missing new data
                 end = fh.seek(0, 2)
                 if pos > end:
-                    _log(f'WARNING: data file was truncated (pos={pos} > size={end}); resetting read position')
+                    _log(f'WARNING: data file truncated; resetting read position')
                     pos = 0
                 fh.seek(pos)
                 if pos == 0:
-                    fh.readline()  # skip header when reading from the top of a file
+                    fh.readline()
                     pos = fh.tell()
                 lines = fh.readlines()
-                pos = fh.tell()  # save position so next iteration continues from here
+                pos = fh.tell()
             for line in lines:
                 p = parse_row(next(csv.reader([line.strip()]), []))
                 if p:
-                    _append_point(p)  # add new point to the rolling cache
+                    _append_point(p)
+        time.sleep(1)
 
-        time.sleep(1)  # poll the file once per second, matching ingest's ~1 Hz write rate
-
-if not TEST_MODE:
-    # only start the cache worker in live mode; test mode serves from the test file directly
-    threading.Thread(target=_cache_worker, daemon=True).start()
 
 # ── Routes ────────────────────────────────────────────────────────────────────
-@app.route('/')
+
+@mesoview_bp.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/initial')
+
+@mesoview_bp.route('/initial')
 def initial():
-    """Return the last 2 hours of records as JSON for chart initialization."""
-    empty = {k: [] for k in ('ts', 't', 'td', 'wspd', 'wdir', 'pressure', 'compass_dir', 'lat', 'lon', 'rh')}
-    if TEST_MODE:
-        # In test mode, preload the 2 hours before the replay start point
-        with open(TEST_FILE) as fh:
-            reader = csv.reader(fh)
-            next(reader, None)  # skip header
-            data = []
-            for r in reader:
-                p = parse_row(r)
-                if p:
-                    data.append(p)
-        if not data:
-            return jsonify(empty)
-        start_ts = data[0]['ts'] + TEST_START_OFFSET  # replay starts this many seconds into the file
-        if start_ts > data[-1]['ts']:
-            start_ts = data[-1]['ts']  # clamp to end of file if offset overshoots
-        cutoff = start_ts - 2 * 60 * 60  # show 2 hours of history before the replay start point
-        result = {k: [] for k in empty}
-        for p in data:
-            if cutoff <= p['ts'] < start_ts:  # only include points in the 2-hour pre-replay window
-                for k, v in p.items():
-                    result[k].append(v)
-        _log(f'TEST initial: start_ts={start_ts}, cutoff={cutoff}, points={len(result["ts"])}')
-        return jsonify(result)
-    # live mode: serve directly from the in-memory cache — no disk I/O on client connect
-    cutoff = datetime.now(timezone.utc).timestamp() - 2 * 60 * 60  # 2 hours ago as a unix timestamp
+    empty = {k: [] for k in ('ts', 't', 'td', 'wspd', 'wdir', 'pressure',
+                              'compass_dir', 'lat', 'lon', 'rh')}
+    cutoff = datetime.now(timezone.utc).timestamp() - 2 * 60 * 60
     with _data_lock:
-        snapshot = list(_data_buf)  # copy the deque while holding the lock to avoid mid-iteration modification
+        snapshot = list(_data_buf)
     result = {k: [] for k in empty}
     for p in snapshot:
-        if p['ts'] >= cutoff:  # filter to the last 2 hours in case the cache holds older data
+        if p['ts'] >= cutoff:
             for k, v in p.items():
                 result[k].append(v)
     return jsonify(result)
 
-@app.route('/stream')
-def stream():
-    """SSE endpoint — pushes one JSON point per second to all connected clients."""
-    def generate_test():
-        """Replay test.txt at 1 Hz using timestamps from file, looping forever."""
-        with open(TEST_FILE) as fh:
-            reader = csv.reader(fh)
-            next(reader, None)   # skip header
-            data = []
-            for r in reader:
-                if len(r) <= max(IDX.values()):
-                    continue  # skip malformed rows before attempting to parse
-                p = parse_row(r)
-                if p:
-                    data.append(p)
-        if TEST_START_OFFSET and data:
-            start_ts = data[0]['ts'] + TEST_START_OFFSET  # fast-forward into the file
-            if start_ts > data[-1]['ts']:
-                start_ts = data[-1]['ts']  # clamp so we don't skip past the end
-            data = [p for p in data if p['ts'] >= start_ts]
-        _log(f'TEST stream points={len(data)} (offset={TEST_START_OFFSET}s)')
-        if not data:
-            while True:
-                yield ': keep-alive\n\n'
-                time.sleep(2)
-        while True:
-            for p in data:
-                yield f'data: {json.dumps(p)}\n\n'  # SSE format: "data: <payload>\n\n"
-                time.sleep(1)                        # emit one point per second to simulate live 1 Hz data
 
+@mesoview_bp.route('/stream')
+def stream():
     def generate():
         keepalive_interval = 2
         with _data_lock:
@@ -417,9 +217,11 @@ def stream():
         try:
             while True:
                 with _data_cond:
-                    changed = _data_cond.wait_for(lambda: _data_seq != last_seq, timeout=keepalive_interval)
+                    changed = _data_cond.wait_for(
+                        lambda: _data_seq != last_seq, timeout=keepalive_interval
+                    )
                     if changed:
-                        point = _data_buf[-1] if _data_buf else None  # guard against empty deque on startup
+                        point    = _data_buf[-1] if _data_buf else None
                         last_seq = _data_seq
                     else:
                         point = None
@@ -428,102 +230,18 @@ def stream():
                 else:
                     yield f'data: {json.dumps(point)}\n\n'
         except GeneratorExit:
-            pass  # client disconnected; generator is being closed normally
+            pass
 
     return Response(
-        generate_test() if TEST_MODE else generate(),
+        generate(),
         mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',       # prevent browsers/proxies from caching the SSE stream
-            'X-Accel-Buffering': 'no',         # disable nginx proxy buffering so events reach the browser immediately
-        },
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
     )
 
 
-def _current_git_dirty() -> bool:
-    return bool(subprocess.run(
-        ['git', 'status', '--porcelain'],
-        cwd=REPO_DIR, capture_output=True, text=True, timeout=5,
-    ).stdout.strip())
-
-
-def _local_request_addrs() -> set[str]:
-    addrs = {'127.0.0.1', '::1'}
-    try:
-        addrs.add(get_local_ip())
-    except Exception:
-        pass
-    try:
-        for family, _socktype, _proto, _canonname, sockaddr in socket.getaddrinfo(socket.gethostname(), None):
-            if family in (socket.AF_INET, socket.AF_INET6):
-                addrs.add(sockaddr[0])
-    except Exception:
-        pass
-    return addrs
-
-
-def _request_is_local() -> bool:
-    addr = request.remote_addr or ''
-    try:
-        if ipaddress.ip_address(addr).is_loopback:
-            return True
-    except ValueError:
-        return False
-    return addr in _local_request_addrs()
-
-@app.route('/version')
-def version():
-    """Return cached git status (populated by background thread)."""
-    with _ver_lock:
-        return jsonify(dict(_ver_cache))  # copy the dict while holding the lock to avoid partial reads
-
-@app.route('/update', methods=['POST'])
-def update():
-    """Run git pull in the repo directory, then restart the server process."""
-    if not _request_is_local():
-        return jsonify({'ok': False, 'output': 'Update is only allowed from the host machine.', 'changed': False}), 403
-    if _current_git_dirty():
-        return jsonify({'ok': False, 'output': 'Working tree has local changes; commit or discard them before updating.', 'changed': False}), 409
-    try:
-        result = subprocess.run(
-            ['git', 'pull'],
-            cwd=REPO_DIR,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        output = (result.stdout + result.stderr).strip()
-        # 'changed' is True only if pull succeeded AND new commits were actually downloaded
-        changed = result.returncode == 0 and 'Already up to date.' not in output
-    except Exception as e:
-        return jsonify({'ok': False, 'output': str(e), 'changed': False})
-
-    if changed:
-        def _exit():
-            time.sleep(0.5)  # brief delay so this HTTP response can finish before we exit
-            os._exit(42)  # sentinel code — supervisor will restart all children with new code
-        threading.Thread(target=_exit, daemon=True).start()
-
-    return jsonify({'ok': result.returncode == 0, 'output': output, 'changed': changed})
-
-# ─────────────────────────────────────────────────────────────────────────────
-if __name__ == '__main__':
-    ensure_uplot()  # download uPlot JS/CSS to static/ if not already present (needed for offline use)
-    if TEST_MODE:
-        _log(f'TEST MODE — replaying {TEST_FILE}')
-    else:
-        _log(f'Data directory: {DATA_DIR}')
-    advertise_mdns(hostname=MDNS_HOSTNAME, port=HTTP_PORT)
-    local_ip = get_local_ip()
-    url = f'http://{local_ip}:{HTTP_PORT}'
-    _log(f'Starting MM Viewer — open {url}')
-    if NO_BROWSER:
-        _log('--no-browser set; skipping automatic tab open')
-    else:
-        try:
-            webbrowser.open(url, new=2)  # new=2 opens in a new browser tab rather than a new window
-        except Exception as e:
-            _log(f'Warning: could not open browser: {e}')  # non-fatal; user can open the URL manually
-    # host='0.0.0.0' binds to all interfaces so devices on the LAN can connect, not just localhost
-    # threaded=True allows Flask to handle multiple SSE clients simultaneously without blocking
-    app.run(host='0.0.0.0', port=HTTP_PORT, debug=False, threaded=True)
+def cache_stats() -> dict:
+    """Called by supervisor's /api/status to report cache health."""
+    with _data_lock:
+        n = len(_data_buf)
+        fname = today_file().name if not TEST_MODE else TEST_FILE.name
+    return {'points': n, 'current_file': fname}

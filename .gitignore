@@ -4,3 +4,4 @@ meso360.config.json
 .venv/
 __pycache__/
 *.pyc
+meso_ui.md

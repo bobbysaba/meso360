@@ -386,6 +386,7 @@
 <body>
 
 <header>
+  <a href="/" style="color:var(--subtext);font-size:0.75rem;text-decoration:none;margin-right:12px;">&larr; Control Panel</a>
   <h1>NSSL Mobile Mesonet</h1>
   <div id="status-bar">
     <span id="conn-dot"></span>              <!-- colored dot: green=live, orange=stale, red=disconnected -->
@@ -1648,7 +1649,7 @@ setInterval(() => {
 }, 5000);
 
 function connect() {
-  const es = new EventSource('/stream');
+  const es = new EventSource('/view/stream');
   es.onopen  = () => updateHeaderStatus({ stale: lastDataAt !== null && (Date.now() - lastDataAt) > STALE_MS });
   // On any error, close the connection and retry after 5 s — handles brief
   // network blips and server restarts without needing a page reload.
@@ -1717,7 +1718,7 @@ requestAnimationFrame(() => {
   // Fetches up to 2 hours of pre-existing data so the charts aren't empty on load.
   // Any SSE points that arrived during the fetch are held in pendingPoints and
   // appended here in sequence so there are no gaps or duplicates.
-  fetch('/initial')
+  fetch('/view/initial')
     .then(r => r.json())
     .then(d => {
       // Rebuild buffer with gap detection
