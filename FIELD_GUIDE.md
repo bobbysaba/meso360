@@ -23,7 +23,9 @@
    - [Starting the System](#starting-the-system)
    - [Preflight Checks](#preflight-checks)
    - [Resolving WARN Conditions](#resolving-warn-conditions)
-6. [Dashboard Guide](#6-dashboard-guide)
+6. [Control Panel and Dashboard Guide](#6-control-panel-and-dashboard-guide)
+   - [Control Panel (`/`)](#control-panel-)
+   - [Dashboard (`/view`)](#dashboard-view)
    - [Connection Status Dot](#connection-status-dot)
    - [Header Controls](#header-controls)
    - [Charts](#charts)
@@ -34,9 +36,6 @@
    - [Sidebar: Status Card](#sidebar-status-card)
    - [Update Indicator](#update-indicator)
 7. [Variables Reference](#7-variables-reference)
-   - [Sensor Variables](#sensor-variables)
-   - [GPS Variables](#gps-variables)
-   - [Derived Variables](#derived-variables)
 8. [Data File Format](#8-data-file-format)
    - [File Naming](#file-naming)
    - [File Structure](#file-structure)
@@ -71,10 +70,10 @@ The system is designed to run unattended. Once started, it manages its own proce
 
 | Component | Script | Role |
 |-----------|--------|------|
+| **supervisor** | `supervisor.py` | Hosts the Flask web app (control panel at `/`, dashboard at `/view`); starts and monitors mesoingest and mesosync as child processes; restarts any that crash; rotates logs at midnight |
 | **mesoingest** | `mesoingest.py` | Fetches observations from the datalogger at 1 Hz and writes them to daily `.txt` files |
-| **mesoview** | `mesoview.py` | Serves the web dashboard and streams live data to browsers over SSE |
-| **mesosync** | *(managed by supervisor)* | Maintains a persistent SSH reverse tunnel to `remote.bliss.science` for remote access |
-| **supervisor** | `supervisor.py` | Starts and monitors all three components; restarts any that crash; rotates logs at midnight |
+| **mesoview** | `mesoview.py` | Flask Blueprint registered by supervisor at `/view`; streams live data to browsers over SSE; not runnable standalone |
+| **mesosync** | *(managed by supervisor)* | Maintains a persistent SSH reverse tunnel to `remote.bliss.science` for remote access; optional — disabled if `rtun_port` is not set |
 
 You only ever need to start `supervisor.py`. It manages everything else.
 
@@ -100,7 +99,7 @@ Campbell Scientific Datalogger
   (mesosync)
 ```
 
-All log output from all three components flows through the supervisor into a shared daily log file at `~/mesoview_logs/mesoview.YYYYMMDD.log`.
+All log output from all components flows through the supervisor into a shared daily log file at `~/mesoview_logs/meso360.YYYYMMDD.log`.
 
 ---
 
@@ -127,9 +126,10 @@ Managed automatically by the conda environment or pip:
 
 | Package | Used by |
 |---------|---------|
-| `flask` | mesoview — web server and SSE streaming |
+| `flask` | supervisor / mesoview — web server, control panel, and SSE streaming |
 | `requests` | mesoingest — HTTP requests to the datalogger |
-| `zeroconf` | mesoview — mDNS/Bonjour `.local` hostname advertisement (optional; falls back gracefully if missing) |
+| `psutil` | supervisor — CPU, memory, and disk usage reporting in the control panel |
+| `zeroconf` | supervisor — mDNS/Bonjour `.local` hostname advertisement (optional; falls back gracefully if missing) |
 
 ---
 
@@ -236,10 +236,10 @@ All settings live in `meso360.config.json`. Every key is optional; the system fa
 | Key | Type | Default | Component | Description |
 |-----|------|---------|-----------|-------------|
 | `data_dir` | string (path) | `~/data/raw/mesonet` | mesoingest, mesoview | Directory where daily `.txt` data files are written by mesoingest and read by mesoview. Supports `~` for home directory. Created automatically on first run. |
-| `log_dir` | string (path) | `~/mesoview_logs` | supervisor | Directory where daily log files are written. File names follow the pattern `mesoview.YYYYMMDD.log`. Created automatically on first run. |
+| `log_dir` | string (path) | `~/mesoview_logs` | supervisor | Directory where daily log files are written. File names follow the pattern `meso360.YYYYMMDD.log`. Created automatically on first run. |
 | `logger_ip` | string | `192.168.4.6` | mesoingest | LAN IP address of the Campbell Scientific datalogger. Check the vehicle network configuration if the default does not work. |
-| `http_port` | integer | `8080` | mesoview | Port the dashboard web server listens on. Change if 8080 conflicts with another service on this machine. |
-| `mdns_hostname` | string | `mesoview` | mesoview | Hostname advertised via mDNS/Bonjour. The dashboard will be accessible at `http://<hostname>.local:<port>` on networks that support mDNS. |
+| `http_port` | integer | `8080` | supervisor | Port the web server listens on (control panel at `/`, dashboard at `/view`). Change if 8080 conflicts with another service on this machine. |
+| `mdns_hostname` | string | `mesoview` | supervisor | Hostname advertised via mDNS/Bonjour. The system will be accessible at `http://<hostname>.local:<port>` on networks that support mDNS. |
 | `ingest_retry_max` | integer | `100` | mesoingest | Maximum number of consecutive fetch failures before mesoingest exits (allowing supervisor to restart it). At the default retry delay of 5 s, this gives ~8 minutes of retries before a restart. |
 | `ingest_retry_delay` | integer | `5` | mesoingest | Seconds to wait between retry attempts when the datalogger is unreachable. |
 | `rtun_port` | integer | *(none)* | mesosync | Port for the SSH reverse tunnel to `remote.bliss.science`. **Must be unique per vehicle** — two vehicles using the same port will conflict. If omitted, mesosync is disabled entirely. |
@@ -260,12 +260,13 @@ cd /path/to/meso360
 python supervisor.py
 ```
 
-The supervisor will start mesoingest, mesoview, and mesosync (if configured), writing all output to both the terminal and the daily log file.
+The supervisor will start mesoingest and mesosync (if configured), writing all output to both the terminal and the daily log file. A browser window opens automatically on startup pointing to the control panel. To skip this, use `--no-browser`.
 
 Open a browser on any device on the same network and navigate to:
 
 ```
-http://<host-machine-ip>:8080
+http://<host-machine-ip>:8080        # control panel
+http://<host-machine-ip>:8080/view   # mesoview dashboard
 ```
 
 Or, on networks with mDNS/Bonjour support:
@@ -346,9 +347,28 @@ WARN  SSH key not found: /home/user/.ssh/clamps_rsa
 
 ---
 
-## 6. Dashboard Guide
+## 6. Control Panel and Dashboard Guide
 
-The dashboard is a single-page web application served by mesoview. It shows live data streamed from the host machine over SSE (Server-Sent Events) — a persistent connection that pushes one update per second to every connected browser.
+### Control Panel (`/`)
+
+The control panel is the primary operator interface, served by supervisor at `/`. It shows:
+
+- **Components** — status dot, uptime, restart count, and start/stop/restart/enable/disable buttons for mesoingest and mesosync. Mesoview (in-process) is always shown as running.
+- **Quick Links** — direct links to the mesoview dashboard and the datalogger rack web interface.
+- **Config** — current values from `meso360.config.json`.
+- **System** — supervisor URL, UTC clock, uptime, cache stats, Python version, and live/test mode indicator.
+- **Position** — latest GPS lat/lon with a Google Maps link.
+- **Resources** — CPU, memory, and disk usage.
+- **Recent Log** — live-streaming tail of the current log file.
+- **Latest Observation sidebar** — compass rose (vehicle heading + wind direction), current met values, 30-second averages, max wind speed tracker, and a status card.
+
+Component enable/disable state is persisted to `meso360.config.json` so it survives a supervisor restart.
+
+---
+
+### Dashboard (`/view`)
+
+The dashboard is a single-page web application served by mesoview at `/view`. It shows live data streamed from the host machine over SSE (Server-Sent Events) — a persistent connection that pushes one update per second to every connected browser.
 
 ### Connection Status Dot
 
@@ -470,13 +490,15 @@ The Status card at the bottom of the sidebar provides a compact system health su
 
 ### Update Indicator
 
-In the bottom-right corner of the dashboard, a small indicator shows the git status of the running code:
+In the top-right corner of the header (on both the control panel and dashboard), a small button shows the git status of the running code:
 
 | State | Appearance | Meaning |
 |-------|------------|---------|
-| Up to date | Hidden | Nothing to do |
-| Update available | `↑ Update · <commit>` button | Remote repository has new commits, the worktree is clean, and the update can be triggered from the host machine running mesoview. Click to run `git pull` and restart all components automatically. |
-| DEV badge | Orange `DEV` badge | Repo has uncommitted local changes. The Update button is hidden and the update path is blocked until those changes are committed or discarded. |
+| Up to date | `up to date` (muted) | Nothing to do |
+| Update available | `update available` (yellow) | Remote repository has new commits and the worktree is clean. Click to run `git pull` and restart mesoingest and mesosync automatically. Only clickable from the host machine. |
+| Local changes | `dev` (orange) | Repo has uncommitted local changes. Updates are blocked until the worktree is clean. |
+
+If `supervisor.py` itself changed in the pull, a banner appears prompting you to restart the process manually.
 
 ---
 
@@ -729,16 +751,16 @@ To check that it is running: open **Task Manager** → **Details** → look for 
 
 ## 10. Updating
 
-### Using the Dashboard
+### Using the Update Button
 
-If the remote repository has new commits while the system is running, an `↑ Update · <commit>` button appears in the bottom-right corner of the dashboard. Clicking it:
+If the remote repository has new commits while the system is running, an `update available` button appears in the top-right corner of the header on both the control panel and dashboard. Clicking it:
 
 1. Runs `git pull` in the repo directory
-2. Shows the git output on screen
-3. If new commits were downloaded, signals the supervisor to restart **all three components** (mesoingest, mesoview, mesosync) within a few seconds
-4. The browser reconnects and reloads automatically
+2. Restarts mesoingest and mesosync with the new code within a few seconds
+3. The browser reconnects and reloads automatically
+4. If `supervisor.py` itself changed, a banner prompts you to restart the process manually
 
-The update endpoint only accepts requests from the host machine running `mesoview`; other devices on the LAN can view the dashboard but cannot trigger updates. If the repo has uncommitted local changes, the `DEV` badge is shown instead of the Update button and the update path is blocked until the worktree is clean.
+The update endpoint only accepts requests from the host machine running supervisor; other devices on the LAN can view the pages but cannot trigger updates. If the repo has uncommitted local changes, the `dev` badge is shown instead and updates are blocked until the worktree is clean.
 
 ### At Startup
 
@@ -805,20 +827,20 @@ The config file (`meso360.config.json`) is never modified by a git update.
 All three components write to a shared daily log file. To follow it live:
 
 ```bash
-tail -f ~/mesoview_logs/mesoview.$(date +%Y%m%d).log
+tail -f ~/mesoview_logs/meso360.$(date +%Y%m%d).log
 ```
 
 Each line is prefixed with a UTC timestamp and the component name:
 
 ```
-[2025-06-05 17:52:28] [supervisor] starting — log: .../mesoview.20250605.log
+[2025-06-05 17:52:28] [supervisor] starting — log: .../meso360.20250605.log
 [2025-06-05 17:52:28] [supervisor] === Preflight checks ===
 [2025-06-05 17:52:29] [mesoingest] Read attempt 1 failed (Connection refused). Retrying in 5s...
 [2025-06-05 17:52:34] [mesoingest] Read attempt 2 failed (Connection refused). Retrying in 5s...
-[2025-06-05 17:52:39] [mesoview] Starting MM Viewer — open http://192.168.4.10:8080
+[2025-06-05 17:52:39] [mesoview] WARNING: still waiting for data file .../20250605.txt (2s elapsed)
 ```
 
-Log files rotate at midnight UTC. The previous day's log remains at `mesoview.YYYYMMDD.log` (the previous date's stamp).
+Log files rotate at midnight UTC. The previous day's log remains at `meso360.YYYYMMDD.log` (the previous date's stamp).
 
 ---
 
@@ -826,22 +848,27 @@ Log files rotate at midnight UTC. The previous day's log remains at `mesoview.YY
 
 ```
 meso360/
-├── supervisor.py                   # Entry point — starts and monitors all three components
+├── supervisor.py                   # Entry point — Flask app + process manager (control panel at /, dashboard at /view)
 ├── mesoingest.py                   # Fetches observations from the Campbell datalogger at 1 Hz
-├── mesoview.py                     # Flask web server; streams live data and serves the dashboard
+├── mesoview.py                     # Flask Blueprint for the real-time dashboard (registered by supervisor)
+├── common.py                       # Shared config loading, paths, and CSV header
+├── analyze_gaps.py                 # Offline utility: scan daily data files for timestamp gaps
 ├── meso360.config.json            # Local config — git-ignored, never overwritten by git pull
 ├── meso360.config.example.json    # Template config — copy this to meso360.config.json
 ├── environment.yml                 # conda environment spec (Python + dependencies)
 ├── requirements.txt                # pip fallback dependency list
+├── launch_supervisor.bat           # Windows double-click launcher
+├── launch_supervisor.command       # macOS / Linux double-click launcher
 ├── templates/
-│   └── index.html                  # Single-page dashboard (HTML/CSS/JS)
+│   ├── index.html                  # Mesoview dashboard (served at /view)
+│   └── control.html                # Control panel (served at /)
 ├── static/
-│   ├── uplot.min.js                # uPlot charting library — auto-downloaded on first run
-│   └── uplot.min.css               # uPlot stylesheet — auto-downloaded on first run
+│   ├── uplot.min.js                # uPlot charting library — auto-downloaded on first run if missing
+│   └── uplot.min.css               # uPlot stylesheet — auto-downloaded on first run if missing
 ├── test_data/
 │   └── test.txt                    # Sample data file for --test mode (no datalogger needed)
-└── docs/
-    └── meso360_field_guide.md      # This document
+├── FIELD_GUIDE.md                  # This document
+└── docs/                           # (legacy location — field guide moved to repo root)
 ```
 
 **Auto-generated at runtime (not in repo):**
@@ -851,7 +878,7 @@ meso360/
 │   └── YYYYMMDD.txt    # Daily observation files written by mesoingest
 
 ~/mesoview_logs/
-    └── mesoview.YYYYMMDD.log    # Daily log files written by supervisor
+    └── meso360.YYYYMMDD.log    # Daily log files written by supervisor
 ```
 
 ---
@@ -882,7 +909,8 @@ meso360/
 - [ ] Conda environment activated: `conda activate meso360`
 - [ ] Supervisor started: `python supervisor.py` (or verified running via launchd/systemd)
 - [ ] Log shows all preflight checks as `PASS` — no `WARN` lines
-- [ ] Dashboard opens in browser at `http://<host-ip>:8080`
+- [ ] Control panel opens in browser at `http://<host-ip>:8080` (opens automatically on startup)
+- [ ] Mesoview dashboard accessible at `http://<host-ip>:8080/view`
 
 **Dashboard verification**
 
@@ -895,7 +923,7 @@ meso360/
 **If any item above fails**, refer to [Section 11 — Troubleshooting](#11-troubleshooting) or check the log file:
 
 ```bash
-tail -f ~/mesoview_logs/mesoview.$(date +%Y%m%d).log
+tail -f ~/mesoview_logs/meso360.$(date +%Y%m%d).log
 ```
 
 ---
