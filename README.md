@@ -259,67 +259,44 @@ python analyze_gaps.py --all            # all files in data dir
 
 ## Desktop icon / launcher
 
-The repo includes ready-made launcher scripts so you can start supervisor with a double-click. The scripts search common conda install locations automatically — no path editing needed on most machines.
+The repo includes a graphical launch dialog (`launch_meso360.pyw`) and one-time shortcut-creation scripts for Windows and macOS. The scripts search common conda install locations automatically — no path editing needed.
 
 ---
 
 ### Windows
 
-`launch_supervisor.bat` is already in the repo. Create a desktop shortcut that points to it by running this in **PowerShell** (replace `YOUR_USER` with your Windows username and `C:\path\to\meso360` with the actual repo path):
+Run `create_shortcut.ps1` **once** from PowerShell to create a `meso360` shortcut on your Desktop:
 
 ```powershell
-$ws = New-Object -ComObject WScript.Shell
-$sc = $ws.CreateShortcut("$env:USERPROFILE\Desktop\Supervisor.lnk")
-$sc.TargetPath     = "C:\path\to\meso360\launch_supervisor.bat"
-$sc.WorkingDirectory = "C:\path\to\meso360"
-$sc.Description    = "Launch meso360 supervisor"
-$sc.Save()
+cd C:\path\to\meso360
+.\create_shortcut.ps1
 ```
 
-Double-click **Supervisor** on the desktop to launch. The terminal window stays open so you can see output; close it (or press Ctrl-C) to stop the supervisor.
+The shortcut uses `pythonw.exe` so no console window flashes on launch. Double-click **meso360** on the Desktop to open the launch dialog, then click **Launch** (or press Enter). The supervisor runs in a new console window; close it to stop.
+
+> If PowerShell blocks the script, run: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
 
 ---
 
 ### macOS
 
-`launch_supervisor.command` is already in the repo. Make it executable once, then create a Finder alias on the Desktop:
+**Step 1 — make the launcher executable (once):**
 
 ```bash
-# one-time setup
-chmod +x /path/to/meso360/launch_supervisor.command
-
-# create Desktop alias (replace the path)
-osascript -e 'tell app "Finder" to make alias file to POSIX file "/path/to/meso360/launch_supervisor.command" at desktop'
+chmod +x /path/to/meso360/launch_meso360.command
 ```
 
-Double-click **launch_supervisor** on the Desktop. Terminal opens, activates the `meso360` env, and starts supervisor. Close the Terminal window (or press Ctrl-C) to stop.
-
-> **Gatekeeper prompt:** the first time macOS may ask you to confirm opening a downloaded script. Click *Open*.
-
----
-
-### Linux
-
-`launch_supervisor.command` is already in the repo. Make it executable once, then create a `.desktop` entry on the Desktop:
+**Step 2 — create the Desktop app bundle (once):**
 
 ```bash
-# one-time setup
-chmod +x /path/to/meso360/launch_supervisor.command
-
-# create .desktop launcher (replace the path)
-cat > ~/Desktop/Supervisor.desktop << 'EOF'
-[Desktop Entry]
-Type=Application
-Name=Supervisor
-Comment=Launch meso360 supervisor
-Exec=/path/to/meso360/launch_supervisor.command
-Terminal=true
-EOF
-
-chmod +x ~/Desktop/Supervisor.desktop
+bash /path/to/meso360/create_shortcut.sh
 ```
 
-Double-click **Supervisor** on the desktop. Your desktop environment will open a terminal, activate the `meso360` env, and start supervisor.
+This creates `~/Desktop/meso360.app` with the mesonet icon. Double-click it to open the launch dialog. The supervisor starts as a background process; use the control panel's stop button or `kill` to stop it.
+
+> **Gatekeeper prompt:** the first time macOS may ask you to confirm opening an unnotarized app. Open **System Settings → Privacy & Security** and click *Open Anyway*, or right-click the app and choose *Open*.
+
+If you just want a plain terminal launcher without the app bundle, double-click `launch_meso360.command` directly from Finder (after the `chmod +x` step above).
 
 ---
 
@@ -440,21 +417,28 @@ To test without rebooting: right-click the task → **Run**.
 
 ```
 meso360/
-├── supervisor.py          # start here — Flask app + process manager (control panel at /, dashboard at /view)
-├── mesoingest.py          # fetches data from the datalogger at 1 Hz; writes daily .txt files
-├── mesoview.py            # Flask Blueprint for the real-time dashboard (registered by supervisor)
-├── common.py              # shared config loading, paths, and CSV header
-├── analyze_gaps.py        # offline utility: scan daily data files for timestamp gaps
-├── meso360.config.example.json   # copy to meso360.config.json and edit
-├── launch_supervisor.bat     # Windows double-click launcher
-├── launch_supervisor.command # macOS / Linux double-click launcher
-├── environment.yml        # conda environment spec
-├── requirements.txt       # pip fallback
+├── supervisor.py               # start here — Flask app + process manager (control panel at /, dashboard at /view)
+├── mesoingest.py               # fetches data from the datalogger at 1 Hz; writes daily .txt files
+├── mesoview.py                 # Flask Blueprint for the real-time dashboard (registered by supervisor)
+├── common.py                   # shared config loading, paths, and CSV header
+├── analyze_gaps.py             # offline utility: scan daily data files for timestamp gaps
+├── meso360.config.example.json # copy to meso360.config.json and edit
+│
+├── launch_meso360.pyw          # graphical launch dialog (cross-platform tkinter GUI)
+├── launch_meso360.command      # macOS: double-click wrapper that opens the dialog via conda
+├── create_shortcut.ps1         # Windows: one-time script — creates Desktop shortcut with icon
+├── create_shortcut.sh          # macOS:   one-time script — creates meso360.app on Desktop
+├── meso360.ico                 # app icon (Windows) — used by launch dialog window chrome
+├── meso360.png                 # app icon (dialog logo + macOS window icon)
+├── mesonet_launcher.ico        # desktop shortcut icon (separate file avoids Windows icon cache conflicts)
+│
+├── environment.yml             # conda environment spec
+├── requirements.txt            # pip fallback
 ├── templates/
-│   ├── index.html         # mesoview dashboard (served at /view)
-│   └── control.html       # control panel (served at /)
-├── FIELD_GUIDE.md         # full reference: installation, dashboard guide, variables, troubleshooting
-├── static/                # uPlot chart library (auto-downloaded on first run if missing)
+│   ├── index.html              # mesoview dashboard (served at /view)
+│   └── control.html            # control panel (served at /)
+├── FIELD_GUIDE.md              # full reference: installation, dashboard guide, variables, troubleshooting
+├── static/                     # uPlot chart library (auto-downloaded on first run if missing)
 ├── test_data/
-│   └── test.txt           # sample data for --test mode
+│   └── test.txt                # sample data for --test mode
 ```
