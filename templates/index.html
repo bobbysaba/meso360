@@ -455,6 +455,10 @@
         <span class="cv-label">Pressure</span>
         <span class="cv-val" id="cv-pressure">--</span>
       </div>
+      <div class="cv-row cv-alt">
+        <span class="cv-label">Alt</span>
+        <span class="cv-val" id="cv-alt">--</span>
+      </div>
       <div class="cv-row cv-wspd">
         <span class="cv-label">Speed</span>
         <span class="cv-val" id="cv-wspd">--</span>
@@ -485,6 +489,10 @@
       <div class="cv-row cv-pressure">
         <span class="cv-label">Pressure</span>
         <span class="cv-val" id="avg-pressure">--</span>
+      </div>
+      <div class="cv-row cv-alt">
+        <span class="cv-label">Alt</span>
+        <span class="cv-val" id="avg-alt">--</span>
       </div>
       <div class="cv-row cv-wspd">
         <span class="cv-label">Speed</span>
@@ -600,6 +608,8 @@ let gapDayStart   = null; // UTC midnight of the day gapCountToday belongs to; r
 
 let initialLoaded = false; // flips true once /initial has been processed; until then, incoming SSE points are queued
 let pendingPoints = [];    // SSE points that arrived before /initial finished; replayed in order after load
+let avgBaseTs = null;      // anchor timestamp for 30s bins (set on first live point)
+let lastAvgBin = null;     // last bin index used to render averages
 
 let isLive     = true;  // false while the Pause button is active; suppresses pushToCharts on incoming data
 let charts     = {};    // keyed uPlot instances: { ttd, wind, pressure }
@@ -620,6 +630,7 @@ const els = {
   cvT: document.getElementById('cv-t'),
   cvTd: document.getElementById('cv-td'),
   cvPressure: document.getElementById('cv-pressure'),
+  cvAlt: document.getElementById('cv-alt'),
   cvWspd: document.getElementById('cv-wspd'),
   cvWdir: document.getElementById('cv-wdir'),
   cvThetae: document.getElementById('cv-thetae'),
@@ -628,6 +639,7 @@ const els = {
   avgT: document.getElementById('avg-t'),
   avgTd: document.getElementById('avg-td'),
   avgPressure: document.getElementById('avg-pressure'),
+  avgAlt: document.getElementById('avg-alt'),
   avgWspd: document.getElementById('avg-wspd'),
   avgWdir: document.getElementById('avg-wdir'),
   avgThetae: document.getElementById('avg-thetae'),
@@ -1191,6 +1203,7 @@ function updateAvgPills() {
   const p    = mean('pressure');
   const wspd = mean('wspd');
   const rh   = mean('rh');
+  const alt  = mean('alt');
   const wdirVals = sl('wdir').filter(v => v != null);
   const wdir = wdirVals.length ? circMean(wdirVals) : null;
 
@@ -1199,6 +1212,7 @@ function updateAvgPills() {
   els.avgT.textContent        = t    != null ? `${t.toFixed(2)} °C / ${(t * 9/5 + 32).toFixed(2)} °F` : '--';
   els.avgTd.textContent       = td   != null ? `${td.toFixed(2)} °C / ${(td * 9/5 + 32).toFixed(2)} °F` : '--';
   els.avgPressure.textContent = p    != null ? `${p.toFixed(2)} hPa` : '--';
+  els.avgAlt.textContent      = alt  != null ? `${alt.toFixed(2)} m` : '--';
   els.avgWspd.textContent     = wspd != null ? `${wspd.toFixed(2)} m/s` : '--';
   els.avgWdir.textContent     = wdir != null ? `${wdir.toFixed(2)}°` : '--';
   els.avgThetae.textContent   = the  != null ? `${the.toFixed(1)} K` : '--';
@@ -1476,6 +1490,7 @@ function appendPoint(p) {
   buf.compass_dir.push(p.compass_dir);
   buf.lat.push(p.lat ?? null);
   buf.lon.push(p.lon ?? null);
+  buf.alt.push(p.alt ?? null);
   buf.rh.push(p.rh ?? null);
 }
 
@@ -1576,6 +1591,7 @@ function updateCurrentValues(p) {
   els.cvT.textContent        = fmtTF(p.t);
   els.cvTd.textContent       = fmtTF(p.td);
   els.cvPressure.textContent = p.pressure != null ? `${fmt2(p.pressure)} hPa` : '--';
+  els.cvAlt.textContent      = p.alt      != null ? `${fmt2(p.alt)} m`     : '--';
   els.cvWspd.textContent     = p.wspd     != null ? `${fmt2(p.wspd)} m/s`     : '--';
   els.cvWdir.textContent     = p.wdir     != null ? `${fmt2(p.wdir)}°`         : '--';
   els.cvThetae.textContent   = the        != null ? `${the.toFixed(1)} K`      : '--';
@@ -1667,9 +1683,11 @@ function connect() {
     trimBuf();
     updateMaxWind(p);
     updateCurrentValues(p);
-    // Recompute 30-second averages every AVG_WIN points rather than every
-    // second to avoid unnecessary DOM churn at 1 Hz.
-    if (buf.ts.length % AVG_WIN === 0) updateAvgPills();
+    // Recompute 30-second averages only when the 30s bin index changes so
+    // the averages stay stationary for 30s and then step once per bin.
+    if (avgBaseTs == null) avgBaseTs = normTs(p.ts);
+    const bin = Math.floor((normTs(p.ts) - avgBaseTs) / AVG_WIN);
+    if (lastAvgBin === null || bin !== lastAvgBin) { updateAvgPills(); lastAvgBin = bin; }
     updateStatusSummary();
     if (isLive) schedulePushToCharts();
   };
@@ -1722,7 +1740,7 @@ requestAnimationFrame(() => {
     .then(r => r.json())
     .then(d => {
       // Rebuild buffer with gap detection
-      buf = { ts: [], t: [], td: [], wspd: [], wdir: [], pressure: [], compass_dir: [], lat: [], lon: [], rh: [] };
+      buf = { ts: [], t: [], td: [], wspd: [], wdir: [], pressure: [], compass_dir: [], lat: [], lon: [], alt: [], rh: [] };
       lastRealTs = null;
       gapCountToday = 0;
       gapDayStart = null;
@@ -1738,6 +1756,7 @@ requestAnimationFrame(() => {
             compass_dir: d.compass_dir ? d.compass_dir[i] : null,
             lat: d.lat ? d.lat[i] : null,
             lon: d.lon ? d.lon[i] : null,
+            alt: d.alt ? d.alt[i] : null,
           };
           appendPoint(p);
         }
@@ -1763,7 +1782,7 @@ requestAnimationFrame(() => {
           ts: buf.ts[i], t: buf.t[i], td: buf.td[i],
           wspd: buf.wspd[i], wdir: buf.wdir[i],
           pressure: buf.pressure[i], compass_dir: buf.compass_dir[i],
-          rh: buf.rh[i],
+          rh: buf.rh[i], alt: buf.alt[i]
         });
       }
     });

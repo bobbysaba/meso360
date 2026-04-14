@@ -33,6 +33,7 @@ IDX = {
     'time_':       _HDR.index('gps_time'),
     'lat':         _HDR.index('lat'),
     'lon':         _HDR.index('lon'),
+    'alt':         _HDR.index('gps_alt'),
     'rh':          _HDR.index('der_rh'),
 }
 
@@ -77,6 +78,7 @@ def parse_row(row: list):
         compass_dir = f(IDX['compass_dir'])
         lat         = f(IDX['lat'])
         lon         = f(IDX['lon'])
+        alt         = f(IDX['alt'])
         rh          = f(IDX['rh'])
 
         if all(v is None for v in (t, td, wspd, wdir, pressure, compass_dir)):
@@ -84,7 +86,7 @@ def parse_row(row: list):
 
         return dict(ts=ts, t=t, td=td, wspd=wspd, wdir=wdir,
                     pressure=pressure, compass_dir=compass_dir,
-                    lat=lat, lon=lon, rh=rh)
+                    lat=lat, lon=lon, alt=alt, rh=rh)
     except (ValueError, IndexError):
         return None
 
@@ -196,7 +198,7 @@ def index():
 @mesoview_bp.route('/initial')
 def initial():
     empty = {k: [] for k in ('ts', 't', 'td', 'wspd', 'wdir', 'pressure',
-                              'compass_dir', 'lat', 'lon', 'rh')}
+                              'compass_dir', 'lat', 'lon', 'alt', 'rh')}
     cutoff = datetime.now(timezone.utc).timestamp() - 2 * 60 * 60
     with _data_lock:
         snapshot = list(_data_buf)

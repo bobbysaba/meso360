@@ -467,6 +467,7 @@
         <div class="cv-row cv-t"><span class="cv-label">T</span><span class="cv-val" id="cv-t">--</span></div>
         <div class="cv-row cv-td"><span class="cv-label">Td</span><span class="cv-val" id="cv-td">--</span></div>
         <div class="cv-row cv-pressure"><span class="cv-label">Pressure</span><span class="cv-val" id="cv-pressure">--</span></div>
+        <div class="cv-row cv-alt"><span class="cv-label">Alt</span><span class="cv-val" id="cv-alt">--</span></div>
         <div class="cv-row cv-wspd"><span class="cv-label">Speed</span><span class="cv-val" id="cv-wspd">--</span></div>
         <div class="cv-row cv-wdir"><span class="cv-label">Wind Dir</span><span class="cv-val" id="cv-wdir">--</span></div>
         <div class="cv-row cv-thetae"><span class="cv-label">&theta;<sub>e</sub></span><span class="cv-val" id="cv-thetae">--</span></div>
@@ -477,6 +478,7 @@
         <div class="cv-row cv-t"><span class="cv-label">T</span><span class="cv-val" id="avg-t">--</span></div>
         <div class="cv-row cv-td"><span class="cv-label">Td</span><span class="cv-val" id="avg-td">--</span></div>
         <div class="cv-row cv-pressure"><span class="cv-label">Pressure</span><span class="cv-val" id="avg-pressure">--</span></div>
+        <div class="cv-row cv-alt"><span class="cv-label">Alt</span><span class="cv-val" id="avg-alt">--</span></div>
         <div class="cv-row cv-wspd"><span class="cv-label">Speed</span><span class="cv-val" id="avg-wspd">--</span></div>
         <div class="cv-row cv-wdir"><span class="cv-label">Wind Dir</span><span class="cv-val" id="avg-wdir">--</span></div>
         <div class="cv-row cv-thetae"><span class="cv-label">&theta;<sub>e</sub></span><span class="cv-val" id="avg-thetae">--</span></div>
@@ -781,7 +783,7 @@ function initLogStream() {
 // ── Live data sidebar ─────────────────────────────────────────────────────────
 const AVG_WIN = 30;
 const GAP_SEC = 2;
-let obsBuf = { ts: [], t: [], td: [], wspd: [], wdir: [], pressure: [], compass_dir: [], lat: [], lon: [], rh: [] };
+let obsBuf = { ts: [], t: [], td: [], wspd: [], wdir: [], pressure: [], compass_dir: [], lat: [], lon: [], alt: [], rh: [] };
 let obsLastRealTs = null;
 let obsGapCount = 0;
 let obsGapDay = null;
@@ -789,6 +791,8 @@ let obsMaxWind = { wspd: null, ts: null, lat: null, lon: null };
 let obsInitialLoaded = false;
 let obsPending = [];
 let obsLastDataAt = null;
+let obsAvgBaseTs = null; // base timestamp to anchor 30s bins (set on first live point)
+let obsLastAvgBin = null; // last bin index used to render averages
 
 function normTs(ts) { return ts > 1e11 ? ts / 1000 : ts; }
 
@@ -819,7 +823,7 @@ function obsAppendPoint(p) {
   obsBuf.ts.push(p.ts); obsBuf.t.push(p.t); obsBuf.td.push(p.td);
   obsBuf.wspd.push(p.wspd); obsBuf.wdir.push(p.wdir); obsBuf.pressure.push(p.pressure);
   obsBuf.compass_dir.push(p.compass_dir ?? null); obsBuf.lat.push(p.lat ?? null);
-  obsBuf.lon.push(p.lon ?? null); obsBuf.rh.push(p.rh ?? null);
+  obsBuf.lon.push(p.lon ?? null); obsBuf.alt.push(p.alt ?? null); obsBuf.rh.push(p.rh ?? null);
   if (obsBuf.ts.length > 7200) { for (const k of Object.keys(obsBuf)) obsBuf[k].splice(0, 1); }
 }
 
@@ -880,6 +884,7 @@ function updateCurrentValues(p) {
   document.getElementById('cv-t').textContent        = fmtTF(p.t);
   document.getElementById('cv-td').textContent       = fmtTF(p.td);
   document.getElementById('cv-pressure').textContent = p.pressure != null ? `${fmt2(p.pressure)} hPa` : '--';
+  document.getElementById('cv-alt').textContent      = p.alt      != null ? `${fmt2(p.alt)} m`     : '--';
   document.getElementById('cv-wspd').textContent     = p.wspd     != null ? `${fmt2(p.wspd)} m/s`     : '--';
   document.getElementById('cv-wdir').textContent     = p.wdir     != null ? `${fmt2(p.wdir)}°`         : '--';
   document.getElementById('cv-thetae').textContent   = the        != null ? `${the.toFixed(1)} K`      : '--';
@@ -894,13 +899,14 @@ function updateAvgPills() {
   if (win === 0) return;
   const sl = k => obsBuf[k].slice(n-win, n);
   const mean = k => { const v = sl(k).filter(x => x != null); return v.length ? v.reduce((a,b)=>a+b,0)/v.length : null; };
-  const t = mean('t'), td = mean('td'), p = mean('pressure'), wspd = mean('wspd'), rh = mean('rh');
+  const t = mean('t'), td = mean('td'), p = mean('pressure'), wspd = mean('wspd'), rh = mean('rh'), alt = mean('alt');
   const wdirVals = sl('wdir').filter(x => x != null);
   const wdir = wdirVals.length ? circMean(wdirVals) : null;
   const the = calcThetaE(t, td, p);
   document.getElementById('avg-t').textContent        = t    != null ? `${t.toFixed(2)} °C / ${(t*9/5+32).toFixed(2)} °F` : '--';
   document.getElementById('avg-td').textContent       = td   != null ? `${td.toFixed(2)} °C / ${(td*9/5+32).toFixed(2)} °F` : '--';
   document.getElementById('avg-pressure').textContent = p    != null ? `${p.toFixed(2)} hPa` : '--';
+  document.getElementById('avg-alt').textContent      = alt  != null ? `${alt.toFixed(2)} m` : '--';
   document.getElementById('avg-wspd').textContent     = wspd != null ? `${wspd.toFixed(2)} m/s` : '--';
   document.getElementById('avg-wdir').textContent     = wdir != null ? `${wdir.toFixed(2)}°` : '--';
   document.getElementById('avg-thetae').textContent   = the  != null ? `${the.toFixed(1)} K` : '--';
@@ -971,7 +977,7 @@ function initObsStream() {
       for (let i = 0; i < d.ts.length; i++) {
         const p = { ts: normTs(d.ts[i]), t: d.t[i], td: d.td[i], wspd: d.wspd[i], wdir: d.wdir[i],
           pressure: d.pressure[i], compass_dir: d.compass_dir?.[i] ?? null,
-          lat: d.lat?.[i] ?? null, lon: d.lon?.[i] ?? null, rh: d.rh?.[i] ?? null };
+          lat: d.lat?.[i] ?? null, lon: d.lon?.[i] ?? null, alt: d.alt?.[i] ?? null, rh: d.rh?.[i] ?? null };
         obsAppendPoint(p);
         updateMaxWind(p);
       }
@@ -983,7 +989,7 @@ function initObsStream() {
       const i = obsBuf.ts.length - 1;
       updateCurrentValues({ ts: obsBuf.ts[i], t: obsBuf.t[i], td: obsBuf.td[i],
         wspd: obsBuf.wspd[i], wdir: obsBuf.wdir[i], pressure: obsBuf.pressure[i],
-        compass_dir: obsBuf.compass_dir[i], rh: obsBuf.rh[i], lat: obsBuf.lat[i], lon: obsBuf.lon[i] });
+        compass_dir: obsBuf.compass_dir[i], rh: obsBuf.rh[i], lat: obsBuf.lat[i], lon: obsBuf.lon[i], alt: obsBuf.alt[i] });
       updateAvgPills();
       updateObsStatus();
       updatePosition();
@@ -996,10 +1002,18 @@ function initObsStream() {
     const p = JSON.parse(e.data);
     p.ts = normTs(p.ts);
     if (!obsInitialLoaded) { obsPending.push(p); return; }
+    // Anchor averages to the first live point timestamp so values step every
+    // AVG_WIN seconds relative to when ingest began on this page.
+    if (obsAvgBaseTs == null) obsAvgBaseTs = p.ts;
     obsAppendPoint(p);
     updateMaxWind(p);
     updateCurrentValues(p);
-    if (obsBuf.ts.length % AVG_WIN === 0) updateAvgPills();
+    // Only recompute averages when the 30s bin index changes.
+    const bin = Math.floor((p.ts - obsAvgBaseTs) / AVG_WIN);
+    if (obsLastAvgBin === null || bin !== obsLastAvgBin) {
+      updateAvgPills();
+      obsLastAvgBin = bin;
+    }
     updateObsStatus();
   };
   es.onerror = () => {};
