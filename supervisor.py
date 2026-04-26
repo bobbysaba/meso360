@@ -138,6 +138,31 @@ def _log_tail_worker(log_dir: Path):
         time.sleep(0.5)
 
 
+def _tail_source_path(source: str, cfg: dict, log_dir: Path) -> Optional[Path]:
+    """Resolve a fixed, safe tail source to today's active file path."""
+    if source == 'log':
+        return log_dir / f'meso360.{date.today().strftime("%Y%m%d")}.log'
+
+    data_dir = Path(cfg.get('data_dir', str(DEFAULT_DATA_DIR))).expanduser()
+    today = datetime.now(timezone.utc).strftime('%Y%m%d')
+    if source == 'obs':
+        return data_dir / f'{today}.txt'
+    if source == 'support':
+        support_dir = data_dir.with_name(f'{data_dir.name}_support')
+        return support_dir / f'{today}_support.txt'
+    return None
+
+
+def _read_tail_lines(path: Path, limit: int) -> list[str]:
+    """Read the last limit lines from a text file."""
+    try:
+        with open(path, errors='replace') as fh:
+            lines = fh.readlines()
+    except OSError:
+        return []
+    return [line.rstrip('\n') for line in lines[-limit:] if line.rstrip('\n')]
+
+
 # ── Helper functions ─────────────────────────────────────────────────────────
 def _split_cmd(cmd: str) -> List[str]:
     if os.name == 'nt':
@@ -710,6 +735,72 @@ def _create_app(cfg: dict, children: List[Child]) -> Flask:
         with _log_ring_lock:
             entries = [e for e in _log_ring if e['seq'] > after]
         return jsonify(entries[-limit:])
+
+    # ── API: file tail stream (SSE) ─────────────────────────────────────
+    @app.route('/api/tail/stream')
+    def api_tail_stream():
+        source = request.args.get('source', 'log')
+        limit = min(request.args.get('lines', 120, type=int), 500)
+        log_dir = Path(cfg.get('log_dir', str(DEFAULT_LOG_DIR))).expanduser()
+        path = _tail_source_path(source, cfg, log_dir)
+        if path is None:
+            return jsonify({'ok': False, 'error': f'unknown tail source: {source}'}), 400
+
+        def generate():
+            pos = 0
+            current_path = path
+            seq = 0
+            waiting = False
+
+            def send(line: str):
+                nonlocal seq
+                seq += 1
+                payload = json.dumps({'seq': seq, 'source': source, 'line': line})
+                return f'event: line\ndata: {payload}\n\n'
+
+            try:
+                while True:
+                    new_path = _tail_source_path(source, cfg, log_dir)
+                    if new_path != current_path:
+                        current_path = new_path
+                        pos = 0
+                        waiting = False
+
+                    if current_path and current_path.exists():
+                        if waiting:
+                            waiting = False
+                        if pos == 0:
+                            for line in _read_tail_lines(current_path, limit):
+                                yield send(line)
+                            pos = current_path.stat().st_size
+                        else:
+                            try:
+                                with open(current_path, errors='replace') as fh:
+                                    end = fh.seek(0, 2)
+                                    if pos > end:
+                                        pos = 0
+                                    fh.seek(pos)
+                                    lines = fh.readlines()
+                                    pos = fh.tell()
+                                for line in lines:
+                                    line = line.rstrip('\n')
+                                    if line:
+                                        yield send(line)
+                            except OSError as e:
+                                yield send(f'ERROR: could not read {current_path}: {e}')
+                    elif not waiting:
+                        yield send(f'waiting for {source} file: {current_path}')
+                        waiting = True
+
+                    yield ': keep-alive\n\n'
+                    time.sleep(0.5)
+            except GeneratorExit:
+                pass
+
+        return Response(
+            generate(), mimetype='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+        )
 
     return app
 

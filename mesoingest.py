@@ -7,7 +7,9 @@
 import os
 import sys
 import time
+import csv
 import datetime as dt
+import threading
 import requests                      # HTTP client used to query the datalogger web interface
 from pathlib import Path
 from datetime import timezone
@@ -24,56 +26,91 @@ _SESSION = requests.Session()  # reuses HTTP connections across 1 Hz polls when 
 
 # set vehicle-specific variables
 DATA_DIR = Path(_CFG.get('data_dir', str(DEFAULT_DATA_DIR))).expanduser()  # where daily .txt files are written
+SUPPORT_DIR = DATA_DIR.with_name(f'{DATA_DIR.name}_support')  # sibling directory; no extra config needed
 IP = _CFG.get('logger_ip', '192.168.4.6')  # LAN IP of the Campbell Scientific datalogger; default is the NSSL truck address
 
 MAX_TRIES    = int(_CFG.get('ingest_retry_max',   100))  # how many consecutive failures before giving up and exiting
 RETRY_DELAY  = int(_CFG.get('ingest_retry_delay',   5))  # seconds to wait between retry attempts
+SUPPORT_TIMEOUT = 0.8  # short timeout keeps support polling from piling up on a slow logger
+
+SUPPORT_HEADER = (
+    'gps_date,gps_time,ws_ms_raw,wdir_raw,flux_dir,'
+    'rmc_msg,rmc_time,rmc_status,rmc_lat,rmc_lat_hemi,rmc_lon,rmc_lon_hemi,'
+    'rmc_speed,rmc_track,rmc_date,rmc_mag_var,rmc_mag_var_dir,'
+    'gga_msg,gga_time,gga_lat,gga_lat_hemi,gga_lon,gga_lon_hemi,gga_quality,'
+    'gga_sats,gga_hdop,gga_alt,gga_alt_units,gga_geoid_sep,gga_geoid_units,'
+    'gga_age,gga_station,utc_offset,wd_offset,x,y'
+)
 
 class TableParser(HTMLParser):
-    """Lightweight HTML table parser — extracts all <td> text content."""
+    """Lightweight HTML table parser — extracts <th>/<td> text content."""
     def __init__(self):
         super().__init__()
+        self.headers = []      # collected text values, one per <th> cell
         self.values = []       # collected text values, one per <td> cell
-        self._in_td = False    # flag: True while the parser is inside a <td>...</td> element
+        self._cell = None      # current cell type while inside <th> or <td>
 
     def handle_starttag(self, tag, attrs):
-        if tag == 'td':
-            self._in_td = True   # entering a table cell; start collecting text
+        if tag in ('th', 'td'):
+            self._cell = tag   # entering a table cell; start collecting text
 
     def handle_endtag(self, tag):
-        if tag == 'td':
-            self._in_td = False  # leaving a table cell; stop collecting text
+        if tag == self._cell:
+            self._cell = None  # leaving a table cell; stop collecting text
 
     def handle_data(self, data):
-        if self._in_td:
-            self.values.append(data.strip())  # only capture text that is inside a <td>
+        if self._cell == 'th':
+            self.headers.append(data.strip())
+        elif self._cell == 'td':
+            self.values.append(data.strip())
+
+
+def _extract_record_num(html):
+    """Extract the datalogger's Current Record number from a NewestRecord response."""
+    try:
+        return int(html.split('Current Record: </b>')[1].split('<')[0].strip())
+    except (IndexError, ValueError):
+        return None
+
+
+def _extract_record_date(html):
+    """Extract the datalogger's Record Date string from a NewestRecord response."""
+    try:
+        return html.split('Record Date: </b>')[1].split('<')[0].strip()
+    except IndexError:
+        return None
+
+
+def fetch_newest_record(ip, table, session=None, timeout=5):
+    """Fetch and parse a NewestRecord table response."""
+    # the datalogger serves its most recent observation via this URL pattern
+    url = f'http://{ip}/command=NewestRecord&table={table}'
+    session = session or _SESSION
+    resp = session.get(url, timeout=timeout)  # reuse the same HTTP session so repeated polls can keep the TCP connection warm
+    resp.raise_for_status()                   # raise immediately on 4xx/5xx HTTP errors
+
+    parser = TableParser()
+    parser.feed(resp.text)  # parse the HTML response and extract table fields
+
+    if not parser.values:
+        raise ValueError(f'No table data found in {table} response')  # treat an empty table as a failure
+
+    return {
+        'headers': parser.headers,
+        'values': parser.values,
+        'record_num': _extract_record_num(resp.text),
+        'record_date': _extract_record_date(resp.text),
+    }
 
 
 def fetch_record(ip, max_tries=100, retry_delay=5, session=None):
     """Fetch the newest mesonet record from the datalogger web interface.
     Returns (values, record_num) where record_num is None if it can't be parsed."""
-    # the datalogger serves its most recent observation via this URL pattern
-    url = f'http://{ip}/command=NewestRecord&table=Obs'
-    session = session or _SESSION
 
     for attempt in range(1, max_tries + 1):
         try:
-            resp = session.get(url, timeout=5)  # reuse the same HTTP session so repeated polls can keep the TCP connection warm
-            resp.raise_for_status()              # raise immediately on 4xx/5xx HTTP errors
-
-            parser = TableParser()
-            parser.feed(resp.text)  # parse the HTML response and extract all <td> values
-
-            if not parser.values:
-                raise ValueError('No table data found in response')  # treat an empty table as a failure
-
-            # extract the sequential record number from the HTML for gap detection
-            try:
-                record_num = int(resp.text.split('Current Record: </b>')[1].split('<')[0].strip())
-            except (IndexError, ValueError):
-                record_num = None
-
-            return parser.values, record_num
+            record = fetch_newest_record(ip, 'Obs', session=session, timeout=5)
+            return record['values'], record['record_num']
 
         except Exception as e:
             if attempt < max_tries:
@@ -127,6 +164,89 @@ def _clean_gps_field(val):
     return s if s.lower() == 'nan' else s.zfill(6)
 
 
+def _format_support_record_date(record_date):
+    """Convert logger Record Date to the DDMMYY/HHMMSS format used by data files."""
+    try:
+        stamp = dt.datetime.strptime(record_date, '%Y-%m-%d %H:%M:%S.%f')
+    except (TypeError, ValueError):
+        stamp = dt.datetime.now(timezone.utc).replace(tzinfo=None)
+        _log(f'WARNING: Support record date invalid ({record_date!r}), using UTC clock')
+    return stamp.strftime('%d%m%y'), stamp.strftime('%H%M%S'), stamp.strftime('%Y%m%d')
+
+
+def _split_nmea(sentence, expected_len):
+    """Strip logger quotes and split an NMEA sentence into a fixed-width field list."""
+    parts = sentence.strip("'\" ").split(',') if sentence else []
+    if len(parts) < expected_len:
+        parts.extend([''] * (expected_len - len(parts)))
+    return parts[:expected_len]
+
+
+def parse_support_record(raw_values, record_date):
+    """Format raw Support table values into a flat CSV row."""
+    if len(raw_values) < 9:
+        raise ValueError(f'expected 9 Support values, got {len(raw_values)}')
+
+    gps_date, gps_time, file_date = _format_support_record_date(record_date)
+    rmc_fields = _split_nmea(raw_values[3], 12)
+    gga_fields = _split_nmea(raw_values[4], 15)
+    row = [
+        gps_date,
+        gps_time,
+        raw_values[0],  # WS_ms_raw
+        raw_values[1],  # WindDir_raw
+        raw_values[2],  # FluxDirection
+        *rmc_fields,
+        *gga_fields,
+        raw_values[5],  # LOCAL_UTC_OFFSET
+        raw_values[6],  # WD_OFFSET
+        raw_values[7],  # X
+        raw_values[8],  # Y
+    ]
+    return row, file_date
+
+
+def _write_support_record(row, file_date):
+    """Write a parsed Support row to its sibling daily support file."""
+    support_file = SUPPORT_DIR / f'{file_date}_support.txt'
+    support_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(support_file, 'x', newline='') as f:
+            f.write(SUPPORT_HEADER + '\n')
+    except FileExistsError:
+        pass
+
+    with open(support_file, 'a', newline='') as f:
+        csv.writer(f, lineterminator='\n').writerow(row)
+
+
+def support_loop():
+    """Poll the Support table at roughly 1 Hz without blocking Obs ingest."""
+    session = requests.Session()
+    last_record_num = None
+    last_warn = 0.0
+
+    while True:
+        start = dt.datetime.now(timezone.utc)
+        try:
+            record = fetch_newest_record(IP, 'Support', session=session, timeout=SUPPORT_TIMEOUT)
+            record_num = record['record_num']
+            if record_num is None or record_num != last_record_num:
+                row, file_date = parse_support_record(record['values'], record['record_date'])
+                _write_support_record(row, file_date)
+                if record_num is not None:
+                    last_record_num = record_num
+        except Exception as e:
+            now = time.monotonic()
+            if now - last_warn >= 60:
+                _log(f'WARNING: Support read failed ({e}); Obs ingest continuing')
+                last_warn = now
+
+        elapsed = (dt.datetime.now(timezone.utc) - start).total_seconds()
+        if elapsed < 1:
+            time.sleep(1 - elapsed)
+
+
 def parse_record(raw_values):
     """Clean and format raw table values into a CSV data line."""
     values = list(raw_values)  # copy so we don't mutate the original list
@@ -176,6 +296,9 @@ def main_loop():
     last_raw_gps_time = None    # raw GPS time string received last iteration (for duplicate detection)
     last_written_gps_time = None  # GPS time actually written (may be corrected); base for +1 s inference
     last_written_ts = None       # unix timestamp of the last written record; used for GPS timestamp gap detection
+
+    threading.Thread(target=support_loop, daemon=True).start()
+    _log(f'Support ingest writing to {SUPPORT_DIR}')
 
     while True:
         start = dt.datetime.now(timezone.utc)  # record loop start time to enforce 1 Hz cadence

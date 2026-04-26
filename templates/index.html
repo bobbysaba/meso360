@@ -710,9 +710,33 @@ function fmtLocalDateTime(ts) {
 }
 
 // The server always sends Unix seconds, but guard against accidental millisecond timestamps.
+function toNum(v) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 function normTs(ts) {
   if (ts == null) return ts;
   return ts > 1e11 ? ts / 1000 : ts;
+}
+
+function normalizePoint(p) {
+  const ts = toNum(p.ts);
+  if (ts == null) return null;
+  return {
+    ts: normTs(ts),
+    t: toNum(p.t),
+    td: toNum(p.td),
+    wspd: toNum(p.wspd),
+    wdir: toNum(p.wdir),
+    pressure: toNum(p.pressure),
+    compass_dir: toNum(p.compass_dir),
+    lat: toNum(p.lat),
+    lon: toNum(p.lon),
+    alt: toNum(p.alt ?? p.gps_alt),
+    rh: toNum(p.rh),
+  };
 }
 
 function xAxis() {
@@ -1675,19 +1699,19 @@ function connect() {
   es.onmessage = e => {
     lastDataAt = Date.now();
     updateHeaderStatus();
-    const p = JSON.parse(e.data);
+    const p = normalizePoint(JSON.parse(e.data));
+    if (p == null) return;
     // /initial and /stream can race — queue points that arrive before the
     // history fetch resolves, then replay them in appendPoint order after.
     if (!initialLoaded) { pendingPoints.push(p); return; }
-    p.ts = normTs(p.ts);
     appendPoint(p);
     trimBuf();
     updateMaxWind(p);
     updateCurrentValues(p);
     // Recompute 30-second averages only when the 30s bin index changes so
     // the averages stay stationary for 30s and then step once per bin.
-    if (avgBaseTs == null) avgBaseTs = normTs(p.ts);
-    const bin = Math.floor((normTs(p.ts) - avgBaseTs) / AVG_WIN);
+    if (avgBaseTs == null) avgBaseTs = p.ts;
+    const bin = Math.floor((p.ts - avgBaseTs) / AVG_WIN);
     if (lastAvgBin === null || bin !== lastAvgBin) { updateAvgPills(); lastAvgBin = bin; }
     updateStatusSummary();
     if (isLive) schedulePushToCharts();
@@ -1747,8 +1771,8 @@ requestAnimationFrame(() => {
       gapDayStart = null;
       if (Array.isArray(d.ts)) {
         for (let i = 0; i < d.ts.length; i++) {
-          const p = {
-            ts: normTs(d.ts[i]),
+          const p = normalizePoint({
+            ts: d.ts[i],
             t: d.t[i],
             td: d.td[i],
             wspd: d.wspd[i],
@@ -1758,13 +1782,13 @@ requestAnimationFrame(() => {
             lat: d.lat ? d.lat[i] : null,
             lon: d.lon ? d.lon[i] : null,
             alt: d.alt ? d.alt[i] : null,
+            gps_alt: d.gps_alt ? d.gps_alt[i] : null,
             rh: d.rh ? d.rh[i] : null,
-          };
-          appendPoint(p);
+          });
+          if (p != null) appendPoint(p);
         }
       }
       for (const p of pendingPoints) {
-        p.ts = normTs(p.ts);
         appendPoint(p);
       }
       pendingPoints = [];
