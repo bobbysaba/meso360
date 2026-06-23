@@ -1071,9 +1071,9 @@ function initTTd() {
     series: [
       { value: (_u, v) => fmtLocalDateTime(v) },
       { label: 'T',  stroke: C.t,  width: 2, spanGaps: false,
-        value: (_u, v) => v == null ? '' : `${v.toFixed(2)} °C` },
+        value: (_u, v) => v == null ? '' : `${v.toFixed(2)} °C (${(v * 9/5 + 32).toFixed(2)} °F)` },
       { label: 'Td', stroke: C.td, width: 2, spanGaps: false,
-        value: (_u, v) => v == null ? '' : `${v.toFixed(2)} °C` },
+        value: (_u, v) => v == null ? '' : `${v.toFixed(2)} °C (${(v * 9/5 + 32).toFixed(2)} °F)` },
     ],
   }, [[], [], []], document.getElementById('chart-ttd'));
 }
@@ -1568,7 +1568,7 @@ function drawCompass(deg, wdir) {
 
   // ── Wind direction arrow (blue) — drawn before heading so heading renders on top ──
   if (wdir != null) {
-    const wa = (wdir - 90) * Math.PI / 180;
+    const wa = (wdir + 90) * Math.PI / 180;
     const wTipX  = cx + Math.cos(wa) * (R * 0.65);
     const wTipY  = cy + Math.sin(wa) * (R * 0.65);
     const wStemX = cx + Math.cos(wa) * (dotR + 1);
