@@ -291,6 +291,13 @@ def _safe_disk_usage(path: Path):
         return None
 
 
+def _has_display() -> bool:
+    """False on headless Linux (e.g. a Raspberry Pi with no desktop session)."""
+    if sys.platform.startswith('linux'):
+        return bool(os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY'))
+    return True
+
+
 def _get_local_ip() -> str:
     """Best-effort LAN IP discovery."""
     s = None
@@ -869,7 +876,9 @@ def main() -> int:
     _advertise_mdns(hostname=mdns_hostname, port=http_port)
 
     # Open browser
-    if not _args.no_browser:
+    if not _args.no_browser and not _has_display():
+        _log(f'no display detected — skipping browser; dashboard at http://{_get_local_ip()}:{http_port}')
+    elif not _args.no_browser:
         local_ip = _get_local_ip()
         url = f'http://{local_ip}:{http_port}'
         _log(f'Opening {url}')

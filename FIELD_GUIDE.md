@@ -43,6 +43,7 @@
    - [Missing and Invalid Values](#missing-and-invalid-values)
 9. [Run on Startup](#9-run-on-startup)
    - [macOS — launchd](#macos--launchd)
+   - [Raspberry Pi (headless)](#raspberry-pi-headless)
    - [Linux — systemd](#linux--systemd)
    - [Linux — cron](#linux--cron)
    - [Windows — Task Scheduler](#windows--task-scheduler)
@@ -107,7 +108,7 @@ All log output from all components flows through the supervisor into a shared da
 
 ### Hardware
 
-- Any laptop or mini-PC running macOS, Linux, or Windows 10/11
+- Any laptop or mini-PC running macOS, Linux, or Windows 10/11, or a Raspberry Pi 4/5 running 64-bit Raspberry Pi OS (headless is fine — see [Raspberry Pi (headless)](#raspberry-pi-headless))
 - Minimum 4 GB RAM (16 GB recommended; the in-memory data cache uses ~50 MB at 1 Hz over 2 hours)
 - Network connection to the Campbell Scientific datalogger (vehicle LAN)
 
@@ -676,6 +677,57 @@ launchctl list | grep com.mesoview
 
 ---
 
+### Raspberry Pi (headless)
+
+A Raspberry Pi can be the vehicle machine. It runs mesoingest and mesosync and hosts the control panel and dashboard. It doesn't need a monitor or desktop: open the dashboard from any laptop, tablet or phone on the vehicle network.
+
+**Hardware / OS**
+
+- Raspberry Pi 4 or 5, 2 GB RAM or more
+- **Raspberry Pi OS Lite (64-bit)**. Set the hostname, user, Wi-Fi/Ethernet and SSH in Raspberry Pi Imager before flashing
+- A good-quality SD card, or better, boot from a USB SSD. meso360 writes the data and log files all day, and cheap SD cards wear out under that load
+
+**Install**
+
+SSH into the Pi, then:
+
+```bash
+git clone <repo-url> ~/meso360
+cd ~/meso360
+bash install_pi.sh
+```
+
+`install_pi.sh` does the following:
+
+1. Installs `python3-venv`, `git` and `openssh-client` via apt
+2. Creates `.venv/` in the repo and installs `requirements.txt` (pip, not conda, which is simpler on a Pi)
+3. Copies `meso360.config.example.json` to `meso360.config.json` if no config exists yet
+4. Writes `/etc/systemd/system/meso360.service`, which runs `supervisor.py --no-browser` as your user, starts at boot after the network is up, and restarts on crash
+5. Starts the service and prints the dashboard URL
+
+It's safe to re-run (e.g. after moving the repo). It reuses the venv and your config.
+
+**After install**
+
+- Edit `~/meso360/meso360.config.json`: set `logger_ip`, `rtun_port` and `mdns_hostname`. Leave `data_dir` / `log_dir` as `~/...` paths, or point them at a mounted USB drive. Then `sudo systemctl restart meso360`
+- Copy the SSH key for mesosync: `scp ~/.ssh/clamps_rsa <user>@<pi>.local:~/.ssh/` then on the Pi `chmod 600 ~/.ssh/clamps_rsa`. See [SSH Key Setup](#step-4--ssh-key-setup-mesosync)
+- Browse to `http://<mdns_hostname>.local:8080` (or the IP the installer printed) from another device
+
+**Managing the service**
+
+```bash
+sudo systemctl status meso360     # running? recent output
+sudo systemctl restart meso360    # after a config change
+sudo systemctl stop meso360       # stop until next boot
+journalctl -u meso360 -f          # follow output live
+```
+
+The daily log files in `log_dir` and the control panel's log view work the same as on any other machine. The dashboard's **update** button also works: it runs `git pull` and restarts the components. If `requirements.txt` changed, re-run `bash install_pi.sh`.
+
+> **Headless detection:** on Linux, supervisor skips opening a browser whenever no desktop session is present (`DISPLAY` / `WAYLAND_DISPLAY` unset), so `--no-browser` is optional on a Pi. The service passes it anyway.
+
+---
+
 ### Linux — systemd
 
 Create `~/.config/systemd/user/mesoview.service`:
@@ -857,6 +909,7 @@ meso360/
 ├── meso360.config.example.json    # Template config — copy this to meso360.config.json
 ├── environment.yml                 # conda environment spec (Python + dependencies)
 ├── requirements.txt                # pip fallback dependency list
+├── install_pi.sh                   # Raspberry Pi / systemd Linux: venv + boot service setup
 ├── launch_supervisor.bat           # Windows double-click launcher
 ├── launch_supervisor.command       # macOS / Linux double-click launcher
 ├── templates/

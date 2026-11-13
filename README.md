@@ -21,6 +21,8 @@ python supervisor.py --test       # replay test_data/test.txt at 1 Hz
 python supervisor.py --no-browser # skip opening browser on startup
 ```
 
+On headless Linux (no `DISPLAY`/`WAYLAND_DISPLAY`) the browser step is skipped automatically. For a Raspberry Pi, `bash install_pi.sh` sets up a venv and a systemd boot service. See the Field Guide's Raspberry Pi section.
+
 ### mesoingest — `mesoingest.py`
 
 Fetches the newest observation from the Campbell Scientific datalogger at 1 Hz via its HTTP interface, formats it as a CSV row, and appends it to a daily `.txt` file. Writes a header on the first record of each day. Detects and backfills gaps using the datalogger's `lastrecords.html` endpoint. Corrects duplicate GPS timestamps by inferring +1 s. Retries automatically on network errors and exits after a configurable number of consecutive failures so the supervisor can restart it.
